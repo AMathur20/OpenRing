@@ -23,6 +23,7 @@ This document records all key architectural, technical, product, and regulatory 
 | **DEC-013** | Dual Testing Strategy (Mock Peripheral & iPhone 16 + Gen 3 Ring) | **Accepted** | 2026-09-16 | Testing & Tooling |
 | **DEC-014** | License Selection: GNU GPLv3 with App Store & Google Play Exception | **Accepted** | 2026-09-17 | Legal & Licensing |
 | **DEC-015** | Native SQLite3 WAL Engine Layer (Zero External Dependencies) | **Accepted** | 2026-09-17 | Storage & Concurrency |
+| **DEC-016** | Deterministic Sleep Score Math & Morning Wake-Up Attribution | **Accepted** | 2026-09-17 | Biometric DSP & Scoring |
 
 ---
 
@@ -222,6 +223,25 @@ This document records all key architectural, technical, product, and regulatory 
   * **Zero Overhead / Extreme Performance:** Direct C API prepared statements achieve query latencies under $2\text{ ms}$ for 30 days of data ($8,640$ 5-minute samples), significantly outperforming ORM layers.
   * **Swift 6 Strict Concurrency:** Wrapping SQLite connection pointers in a Swift 6 `actor` serializes database writes safely while WAL mode permits concurrent background reader tasks.
 * **Consequences:** Eliminates external SPM dependency on GRDB. Storage models are clean, pure Swift 6 `Sendable` structs. Requires explicit SQL string management for migrations and queries.
+
+---
+
+### DEC-016: Deterministic Sleep Score Math & Morning Wake-Up Attribution
+* **Status:** Accepted
+* **Date:** 2026-09-17
+* **Context:** While the daily Readiness Score formula was explicitly defined in the PRD, the companion nightly Sleep Score ($0–100$) and the session-to-day attribution rules required a clear deterministic specification.
+* **Decision:**
+  1. **Sleep Score Formulation ($S_{\text{sleep}} \in [0, 100]$):**
+     $$S_{\text{sleep}} = P_{\text{duration}} + P_{\text{efficiency}} + P_{\text{deep}} + P_{\text{rem}}$$
+     * **Duration (35 pts):** Scales linearly up to 7–9 hours (420–540 min). Full 35 pts at $\ge 7\text{ hours}$.
+     * **Efficiency (30 pts):** Time asleep vs time in bed. Full 30 pts at $\ge 85\%$.
+     * **Deep Sleep (20 pts):** Slow-wave restorative sleep. Full 20 pts at $\ge 90\text{ minutes}$ ($\ge 1.5\text{ hours}$).
+     * **REM Sleep (15 pts):** Cognitive/dream restoration. Full 15 pts at $\ge 90\text{ minutes}$ ($\ge 1.5\text{ hours}$).
+  2. **Wake-Up Date Attribution:**
+     * Sleep sessions concluding in the morning (between 04:00 and 14:00) are assigned to the **wake-up date** (`YYYY-MM-DD`), matching the user's perception of their morning readiness evaluation.
+* **Rationale:** Adheres to established sports physiology and clinical sleep hygiene metrics while remaining strictly non-diagnostic and offline.
+* **Consequences:** Provides consistent, reproducible scores across all platforms without depending on opaque proprietary cloud algorithms.
+
 
 
 

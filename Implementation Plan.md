@@ -141,15 +141,25 @@ Once the open questions in Phase 1 are clarified, the development of OpenRing wi
 - Verified with comprehensive test suite: **37/37 passing tests**.
 
 
-### Phase 5: Deterministic DSP & Biometric Evaluation Pipelines
-- Implement `SignalProcessor` using Apple `Accelerate` (`vDSP`):
-  - Artifact rejection ($|x_{i+1} - x_i| > 300\text{ms}$ or $x_i \notin [350, 1800]\text{ms}$).
-  - Rolling 5-minute rMSSD calculation:
-    $$\text{rMSSD} = \sqrt{\frac{1}{N-1}\sum_{i=1}^{N-1}(x_{i+1}-x_i)^2}$$
-  - 14-day exponential moving averages (EMA) for RHR, HRV, and temperature.
+### Phase 5: Deterministic DSP & Biometric Evaluation Pipelines (COMPLETED)
+- Implemented `SignalProcessor` in `OpenRingCore` using Apple `Accelerate` (`vDSP`):
+  - Artifact rejection ($|x_{i+1} - x_i| > 300\text{ms}$ or $x_i \notin [350, 1800]\text{ms}$) with vector-accelerated `vDSP_meanvD`.
+  - Rolling 14-day exponential moving averages (EMA) for RHR, HRV, and temperature baselines ($\alpha = 2/15 \approx 0.1333$).
+  - Polysomnography-aligned Sleep Score formula (DEC-016): duration 35, efficiency 30, deep 20, REM 15.
   - Deterministic Readiness Score computation:
     $$S_{\text{readiness}} = 100 - (0.35\Delta RHR + 0.35\Delta HRV + 0.15\Delta Temp + 0.15(100 - E_{\text{sleep}}))$$
-  - Sleep stage classifier heuristic/statistical engine.
+  - Open heuristic sleep stage fallback classifier (`classifySleepStageHeuristic` and batch `classifySleepStagesHeuristic`, DEC-011).
+- Implemented `DailyEvaluationEngine` actor in `OpenRingStorage`:
+  - Correlates nocturnal biometric samples and temperature telemetry with sleep episodes.
+  - Updates `SleepEpisodeRecord` with nocturnal lowest HR, average HR, average RMSSD, and temperature deviation.
+  - Evaluates Sleep and Readiness scores against 14-day EMA baselines with morning wake-up date attribution (`YYYY-MM-DD`, DEC-016).
+  - Persists `DailyEvaluationRecord` in SQLite.
+- Enhanced `DatabaseService` with targeted query methods:
+  - `fetchDailyEvaluation(for:)`, `fetchLatestDailyEvaluation(before:)`, `fetchSleepEpisode(sessionId:)`, `fetchLatestSleepEpisode()`.
+- Integrated automated evaluation into `SyncCoordinator`:
+  - Consolidates streaming 5-minute epochs into contiguous sleep sessions.
+  - Automatically triggers post-sleep evaluation upon batch sync completion.
+- Verified with automated test suite: **44/44 passing tests**.
 
 ### Phase 6: Edge AI Engine Integration (llama.cpp Metal & Bundled Llama-3.2-3B)
 - Integrate `llama.cpp` via Swift Package Manager with Metal GPU backend.

@@ -248,6 +248,110 @@ func runAllTests() async {
         assert(strainedScore < 75 && strainedScore >= 0, "Strained readiness should reflect penalties")
     }
     
+    await runTest("Sleep score mathematical bounds and component weights (DEC-016)") {
+        // Optimal 8-hour sleep session with full deep and REM stages
+        let perfectScore = SignalProcessor.computeSleepScore(
+            durationSeconds: 28800, // 8 hours
+            efficiencyRatio: 0.92,  // 92%
+            deepSleepSeconds: 6000, // 100 min (>90 min target)
+            remSleepSeconds: 6000   // 100 min (>90 min target)
+        )
+        assert(perfectScore == 100, "Optimal sleep session must achieve score 100, got \(perfectScore)")
+        
+        // Short sleep session (4 hours) with standard efficiency
+        let shortSleepScore = SignalProcessor.computeSleepScore(
+            durationSeconds: 14400, // 4 hours -> (4/7) * 35 = 20 pts
+            efficiencyRatio: 0.85,  // 85% -> 30 pts
+            deepSleepSeconds: 5400, // 90 min -> 20 pts
+            remSleepSeconds: 5400   // 90 min -> 15 pts
+        )
+        assert(shortSleepScore == 85, "4-hour sleep session should scale to 85, got \(shortSleepScore)")
+        
+        // Poor sleep efficiency (60%)
+        let restlessScore = SignalProcessor.computeSleepScore(
+            durationSeconds: 25200, // 7 hours -> 35 pts
+            efficiencyRatio: 0.60,  // (0.60 / 0.85) * 30 = 21.17 pts
+            deepSleepSeconds: 5400, // 20 pts
+            remSleepSeconds: 5400   // 15 pts
+        )
+        assert(restlessScore == 91, "Restless sleep (60% efficiency) should be 91, got \(restlessScore)")
+        
+        // Zero sleep edge case
+        let zeroScore = SignalProcessor.computeSleepScore(
+            durationSeconds: 0,
+            efficiencyRatio: 0.0,
+            deepSleepSeconds: 0,
+            remSleepSeconds: 0
+        )
+        assert(zeroScore == 0, "Zero sleep duration must yield 0, got \(zeroScore)")
+    }
+    
+    await runTest("Open heuristic sleep stage fallback classifier (DEC-011)") {
+        let baselineRhr = 55.0
+        
+        // High motion -> Awake
+        let awakeStage = SignalProcessor.classifySleepStageHeuristic(
+            heartRateBpm: 54.0,
+            baselineRhr: baselineRhr,
+            motionIntensity: 0.45
+        )
+        assert(awakeStage == .awake, "High motion (>0.30) must classify as awake")
+        
+        // Low motion (<0.05) and bradycardia (<= 95% of baseline) -> Deep
+        let deepStage = SignalProcessor.classifySleepStageHeuristic(
+            heartRateBpm: 50.0, // 50 <= 55 * 0.95 = 52.25
+            baselineRhr: baselineRhr,
+            motionIntensity: 0.02
+        )
+        assert(deepStage == .deep, "Low motion and deep HR drop must classify as deep")
+        
+        // Mild motion (<0.15) and sympathetic activation (> 105% of baseline) -> REM
+        let remStage = SignalProcessor.classifySleepStageHeuristic(
+            heartRateBpm: 60.0, // 60 > 55 * 1.05 = 57.75
+            baselineRhr: baselineRhr,
+            motionIntensity: 0.08
+        )
+        assert(remStage == .rem, "Mild motion and elevated HR must classify as REM")
+        
+        // Standard resting -> Light
+        let lightStage = SignalProcessor.classifySleepStageHeuristic(
+            heartRateBpm: 54.0,
+            baselineRhr: baselineRhr,
+            motionIntensity: 0.10
+        )
+        assert(lightStage == .light, "Normal resting values must classify as light sleep")
+        
+        // Multi-epoch batch classifier
+        let epochSamples: [(heartRateBpm: Double, motionIntensity: Double)] = [
+            (50.0, 0.01), // deep
+            (54.0, 0.10), // light
+            (62.0, 0.09), // rem
+            (70.0, 0.50)  // awake
+        ]
+        let batchStages = SignalProcessor.classifySleepStagesHeuristic(samples: epochSamples, baselineRhr: baselineRhr)
+        assert(batchStages == [.deep, .light, .rem, .awake], "Batch classification should match expected stages")
+    }
+    
+    await runTest("14-day EMA multi-day convergence progression") {
+        var baseline: Double? = nil
+        
+        // Day 1 initialization
+        baseline = SignalProcessor.updateExponentialMovingAverage(currentBaseline: baseline, newDailyValue: 50.0)
+        assert(baseline == 50.0, "Day 1 should establish initial baseline")
+        
+        // 14 days of sustained 65.0 bpm
+        let alpha = 2.0 / 15.0 // ~0.1333
+        var expected = 50.0
+        for _ in 1...14 {
+            baseline = SignalProcessor.updateExponentialMovingAverage(currentBaseline: baseline, newDailyValue: 65.0)
+            expected = (65.0 * alpha) + (expected * (1.0 - alpha))
+            assert(abs(baseline! - expected) < 0.0001, "EMA should follow mathematical recurrence")
+        }
+        
+        // After 14 days of +15 bpm, baseline should smoothly transition to ~62.9 bpm
+        assert(baseline! > 62.0 && baseline! < 64.0, "EMA should smoothly trend towards sustained mean")
+    }
+    
     // MARK: - Mock Peripheral & Generator Tests
     print("\n--- [5] Virtual BLE Mock & Synthetic Stream Generator ---")
     
@@ -692,6 +796,221 @@ func runAllTests() async {
         
         let count = await coordinator.eventsProcessedCount
         assert(count == 1, "Yielded event should be processed")
+    }
+    
+    // MARK: - DailyEvaluationEngine & End-to-End Evaluation Pipeline
+    print("\n--- [9] DailyEvaluationEngine & End-to-End Evaluation Pipeline ---")
+    
+    await runTest("DatabaseService targeted queries for evaluations and sleep sessions") {
+        let db = try DatabaseService(inMemory: true)
+        
+        let eval1 = DailyEvaluationRecord(
+            evaluationDate: "2026-05-08",
+            readinessScore: 88,
+            sleepScore: 92,
+            rhrBaseline: 52.0,
+            hrvBaseline: 65.0,
+            generatedAt: 1000
+        )
+        let eval2 = DailyEvaluationRecord(
+            evaluationDate: "2026-05-09",
+            readinessScore: 84,
+            sleepScore: 78,
+            rhrBaseline: 53.0,
+            hrvBaseline: 62.0,
+            generatedAt: 2000
+        )
+        try await db.saveDailyEvaluation(eval1)
+        try await db.saveDailyEvaluation(eval2)
+        
+        let fetchedExact = try await db.fetchDailyEvaluation(for: "2026-05-08")
+        assert(fetchedExact?.evaluationDate == "2026-05-08")
+        assert(fetchedExact?.readinessScore == 88)
+        
+        let fetchedBefore = try await db.fetchLatestDailyEvaluation(before: "2026-05-09")
+        assert(fetchedBefore?.evaluationDate == "2026-05-08")
+        
+        let fetchedLatest = try await db.fetchLatestDailyEvaluation(before: nil)
+        assert(fetchedLatest?.evaluationDate == "2026-05-09")
+        
+        let episode = SleepEpisodeRecord(
+            sessionId: "session_123",
+            startTime: 10000,
+            endTime: 35200,
+            durationSeconds: 25200,
+            efficiencyRatio: 0.90,
+            deepSleepSeconds: 5400,
+            remSleepSeconds: 5400,
+            lightSleepSeconds: 12600,
+            awakeSeconds: 1800,
+            lowestHeartRate: 48,
+            averageHeartRate: 52.0,
+            averageRmssd: 68.0,
+            temperatureDeviation: 0.05
+        )
+        try await db.saveSleepEpisode(episode)
+        
+        let fetchedEp = try await db.fetchSleepEpisode(sessionId: "session_123")
+        assert(fetchedEp?.sessionId == "session_123")
+        assert(fetchedEp?.lowestHeartRate == 48)
+        
+        let latestEp = try await db.fetchLatestSleepEpisode()
+        assert(latestEp?.sessionId == "session_123")
+    }
+    
+    await runTest("DailyEvaluationEngine correlates biometrics, temperature, and computes scores") {
+        let db = try DatabaseService(inMemory: true)
+        let engine = DailyEvaluationEngine(database: db)
+        
+        let startMs: Int64 = 1715000000000
+        let endMs: Int64 = startMs + (28800 * 1000) // 8 hours later
+        
+        // Initial sleep episode without correlated metrics
+        let initialEpisode = SleepEpisodeRecord(
+            sessionId: "sleep_session_1",
+            startTime: startMs,
+            endTime: endMs,
+            durationSeconds: 28800,
+            efficiencyRatio: 0.90,
+            deepSleepSeconds: 6000,
+            remSleepSeconds: 6000,
+            lightSleepSeconds: 14400,
+            awakeSeconds: 2400,
+            lowestHeartRate: 0,
+            averageHeartRate: 0.0,
+            averageRmssd: 0.0,
+            temperatureDeviation: 0.0
+        )
+        try await db.saveSleepEpisode(initialEpisode)
+        
+        // Insert nocturnal biometrics within sleep window
+        let samples: [BiometricSampleRecord] = [
+            BiometricSampleRecord(timestamp: startMs + 1000, heartRateBpm: 54.0, rmssdMs: 70.0, motionIntensity: 0.01, ppgSignalQuality: 1.0),
+            BiometricSampleRecord(timestamp: startMs + 300000, heartRateBpm: 48.0, rmssdMs: 82.0, motionIntensity: 0.01, ppgSignalQuality: 1.0),
+            BiometricSampleRecord(timestamp: startMs + 600000, heartRateBpm: 52.0, rmssdMs: 76.0, motionIntensity: 0.02, ppgSignalQuality: 1.0)
+        ]
+        try await db.saveBiometricSamples(samples)
+        
+        // Insert temperature telemetry within sleep window
+        let temps: [TemperatureTelemetryRecord] = [
+            TemperatureTelemetryRecord(timestamp: startMs + 1000, rawCelsius: 33.6, baselineOffsetCelsius: 0.15),
+            TemperatureTelemetryRecord(timestamp: startMs + 300000, rawCelsius: 33.7, baselineOffsetCelsius: 0.25)
+        ]
+        try await db.saveTemperatureRecords(temps)
+        
+        // Evaluate
+        let (evaluation, updatedEpisode) = try await engine.evaluateSleepSession(initialEpisode)
+        
+        // Verify biometric correlation
+        assert(updatedEpisode.lowestHeartRate == 48, "Lowest HR should be 48 bpm")
+        assert(abs(updatedEpisode.averageHeartRate - 51.33) < 0.1, "Average HR should be ~51.33")
+        assert(abs(updatedEpisode.averageRmssd - 76.0) < 0.1, "Average RMSSD should be 76.0 ms")
+        assert(abs(updatedEpisode.temperatureDeviation - 0.20) < 0.01, "Temp deviation should be +0.20 C")
+        
+        // Verify scores & baselines
+        assert(evaluation.sleepScore == 100, "8 hours, 90% efficiency, >90m deep/REM must achieve Sleep Score 100")
+        assert(evaluation.readinessScore >= 95, "Optimal biometrics should yield readiness >= 95")
+        assert(evaluation.rhrBaseline == 48.0, "First night RHR baseline should be 48.0")
+        assert(abs(evaluation.hrvBaseline - 76.0) < 0.1, "First night HRV baseline should be 76.0")
+    }
+    
+    await runTest("DailyEvaluationEngine multi-day baseline tracking across consecutive nights") {
+        let db = try DatabaseService(inMemory: true)
+        let engine = DailyEvaluationEngine(database: db)
+        
+        // Day 1: 2024-05-08 (ended at 07:00 UTC)
+        let day1End: Int64 = 1715151600000 // 2024-05-08 07:00:00 UTC
+        let day1Start: Int64 = day1End - (28800 * 1000)
+        let day1Episode = SleepEpisodeRecord(
+            sessionId: "night_1",
+            startTime: day1Start,
+            endTime: day1End,
+            durationSeconds: 28800,
+            efficiencyRatio: 0.90,
+            deepSleepSeconds: 5400,
+            remSleepSeconds: 5400,
+            lightSleepSeconds: 15600,
+            awakeSeconds: 2400,
+            lowestHeartRate: 0,
+            averageHeartRate: 0.0,
+            averageRmssd: 0.0,
+            temperatureDeviation: 0.0
+        )
+        try await db.saveSleepEpisode(day1Episode)
+        try await db.saveBiometricSamples([
+            BiometricSampleRecord(timestamp: day1Start + 1000, heartRateBpm: 50.0, rmssdMs: 70.0, motionIntensity: 0.0, ppgSignalQuality: 1.0)
+        ])
+        let (eval1, _) = try await engine.evaluateSleepSession(day1Episode, timeZone: TimeZone(identifier: "UTC")!)
+        assert(eval1.evaluationDate == "2024-05-08")
+        assert(eval1.rhrBaseline == 50.0)
+        assert(eval1.hrvBaseline == 70.0)
+        
+        // Day 2: 2024-05-09 (ended at 07:00 UTC, slightly elevated RHR 56 bpm, lower HRV 55 ms)
+        let day2End: Int64 = day1End + (86400 * 1000)
+        let day2Start: Int64 = day2End - (28800 * 1000)
+        let day2Episode = SleepEpisodeRecord(
+            sessionId: "night_2",
+            startTime: day2Start,
+            endTime: day2End,
+            durationSeconds: 28800,
+            efficiencyRatio: 0.88,
+            deepSleepSeconds: 5400,
+            remSleepSeconds: 5400,
+            lightSleepSeconds: 15600,
+            awakeSeconds: 2400,
+            lowestHeartRate: 0,
+            averageHeartRate: 0.0,
+            averageRmssd: 0.0,
+            temperatureDeviation: 0.0
+        )
+        try await db.saveSleepEpisode(day2Episode)
+        try await db.saveBiometricSamples([
+            BiometricSampleRecord(timestamp: day2Start + 1000, heartRateBpm: 56.0, rmssdMs: 55.0, motionIntensity: 0.0, ppgSignalQuality: 1.0)
+        ])
+        let (eval2, _) = try await engine.evaluateSleepSession(day2Episode, timeZone: TimeZone(identifier: "UTC")!)
+        assert(eval2.evaluationDate == "2024-05-09")
+        
+        // Verify 14-day EMA update: alpha = 2/15 = 0.13333
+        let alpha = 2.0 / 15.0
+        let expectedRhr = (56.0 * alpha) + (50.0 * (1.0 - alpha))
+        let expectedHrv = (55.0 * alpha) + (70.0 * (1.0 - alpha))
+        assert(abs(eval2.rhrBaseline - expectedRhr) < 0.001, "RHR baseline should update according to 14-day EMA")
+        assert(abs(eval2.hrvBaseline - expectedHrv) < 0.001, "HRV baseline should update according to 14-day EMA")
+        
+        // Readiness penalty due to elevated RHR and suppressed HRV
+        assert(eval2.readinessScore < eval1.readinessScore, "Readiness score should drop on physiological strain")
+    }
+    
+    await runTest("End-to-End Pipeline: Synthetic night ingestion automatically evaluates scores and baselines in SQLite") {
+        let generator = MockDataGenerator()
+        let fullNightStream = generator.generateFullNightStream()
+        
+        let reassembler = PacketReassemblyEngine()
+        let events = await reassembler.ingestAndExtractEvents(fullNightStream)
+        
+        let db = try DatabaseService(inMemory: true)
+        let coordinator = SyncCoordinator(database: db)
+        
+        // Process entire 252-event night history stream
+        try await coordinator.processEvents(events)
+        
+        // Verify sleep episode consolidation: 84 consecutive 5-minute epochs consolidated into 1 7-hour session
+        let episodes = try await db.fetchSleepEpisodes(from: 0, to: Int64.max)
+        assert(episodes.count == 1, "84 contiguous 5-minute sleep stage frames must consolidate into 1 episode")
+        let episode = episodes[0]
+        assert(episode.durationSeconds == 25200, "Duration should be 25,200s (7 hours)")
+        assert(episode.lowestHeartRate == 50, "Lowest heart rate should be 50 bpm (from generator: 50 + (i % 8))")
+        assert(episode.averageRmssd > 60.0, "Average RMSSD should be > 60 ms")
+        assert(episode.temperatureDeviation > 0.0, "Temperature deviation should be positive")
+        
+        // Verify daily evaluation was automatically generated and persisted in SQLite
+        let evaluations = try await db.fetchLatestDailyEvaluations(limit: 5)
+        assert(evaluations.count == 1, "Exactly 1 daily evaluation record must be generated")
+        let eval = evaluations[0]
+        assert(eval.sleepScore >= 95, "Sleep score for 7h sleep with healthy stages should be >= 95, got \(eval.sleepScore)")
+        assert(eval.readinessScore >= 90, "Readiness score should be high for nominal synthetic vitals, got \(eval.readinessScore)")
+        assert(eval.rhrBaseline == 50.0, "Initial RHR baseline should match night RHR of 50.0")
+        assert(eval.hrvBaseline > 60.0, "Initial HRV baseline should match night HRV")
     }
     
     print("\n==================================================")

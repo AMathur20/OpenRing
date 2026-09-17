@@ -11,6 +11,7 @@ public actor SyncCoordinator {
     // MARK: - State & Dependencies
     
     public let database: DatabaseService
+    public let evaluationEngine: DailyEvaluationEngine
     public private(set) var isSyncing: Bool = false
     public private(set) var eventsProcessedCount: Int = 0
     public private(set) var lastSyncedTimestamp: Int64? = nil
@@ -19,8 +20,9 @@ public actor SyncCoordinator {
     
     // MARK: - Initialization
     
-    public init(database: DatabaseService) {
+    public init(database: DatabaseService, evaluationEngine: DailyEvaluationEngine? = nil) {
         self.database = database
+        self.evaluationEngine = evaluationEngine ?? DailyEvaluationEngine(database: database)
     }
     
     deinit {
@@ -55,8 +57,9 @@ public actor SyncCoordinator {
         isSyncing = false
     }
     
-    private func markSyncFinished() {
+    private func markSyncFinished() async {
         isSyncing = false
+        _ = try? await evaluationEngine.evaluateLatestSession()
     }
     
     /// Ingests a single `RingEvent`, saving the raw packet audit and transforming typed payloads into SQLite records.
@@ -98,10 +101,11 @@ public actor SyncCoordinator {
             var tempRecords: [TemperatureTelemetryRecord] = []
             for (index, temp) in temps.enumerated() {
                 let sampleTimeMs = baseTimestampMs + Int64(index * 300_000)
+                let offset = round((temp - 33.0) * 100.0) / 100.0
                 tempRecords.append(TemperatureTelemetryRecord(
                     timestamp: sampleTimeMs,
                     rawCelsius: temp,
-                    baselineOffsetCelsius: 0.0
+                    baselineOffsetCelsius: offset
                 ))
             }
             if !tempRecords.isEmpty {
@@ -109,42 +113,146 @@ public actor SyncCoordinator {
             }
             
         case .sleepPhases(let stages):
-            // 5 minutes per stage epoch
+            guard !stages.isEmpty else { break }
             let intervalSec = 300
-            var deepSec = 0
-            var remSec = 0
-            var lightSec = 0
-            var awakeSec = 0
-            for stage in stages {
-                switch stage {
-                case .deep: deepSec += intervalSec
-                case .rem: remSec += intervalSec
-                case .light: lightSec += intervalSec
-                case .awake: awakeSec += intervalSec
-                case .unknown: lightSec += intervalSec
-                }
-            }
-            let totalSec = deepSec + remSec + lightSec + awakeSec
-            let efficiency = totalSec > 0 ? Double(totalSec - awakeSec) / Double(totalSec) : 1.0
-            let endTimeMs = baseTimestampMs + Int64(totalSec * 1000)
-            let sessionId = "sleep_\(baseTimestampMs)"
             
-            let episode = SleepEpisodeRecord(
-                sessionId: sessionId,
-                startTime: baseTimestampMs,
-                endTime: endTimeMs,
-                durationSeconds: totalSec,
-                efficiencyRatio: efficiency,
-                deepSleepSeconds: deepSec,
-                remSleepSeconds: remSec,
-                lightSleepSeconds: lightSec,
-                awakeSeconds: awakeSec,
-                lowestHeartRate: 0,
-                averageHeartRate: 0.0,
-                averageRmssd: 0.0,
-                temperatureDeviation: 0.0
-            )
+            let existing = try await database.fetchLatestSleepEpisode()
+            let episode: SleepEpisodeRecord
+            
+            if let existing = existing, baseTimestampMs >= existing.startTime, baseTimestampMs <= existing.endTime + 1800_000 {
+                // Determine if this is a consecutive 5-minute streaming interval
+                let isStreamingInterval = (baseTimestampMs > existing.startTime && baseTimestampMs <= existing.startTime + Int64(existing.durationSeconds * 1000) + 300_000)
+                
+                if isStreamingInterval {
+                    // Each interval adds 300s for its primary stage
+                    let stage = stages[0]
+                    let addDeep = (stage == .deep ? intervalSec : 0)
+                    let addRem = (stage == .rem ? intervalSec : 0)
+                    let addLight = (stage == .light ? intervalSec : 0)
+                    let addAwake = (stage == .awake ? intervalSec : 0)
+                    
+                    let newEndTimeMs = baseTimestampMs + Int64(intervalSec * 1000)
+                    let newDuration = Int((newEndTimeMs - existing.startTime) / 1000)
+                    
+                    // If this is the second packet (i.e. existing was created with multiple padding stages from packet 0),
+                    // normalize existing to the first packet's single stage
+                    let baseDeep: Int
+                    let baseRem: Int
+                    let baseLight: Int
+                    let baseAwake: Int
+                    
+                    if existing.durationSeconds > intervalSec && baseTimestampMs == existing.startTime + Int64(intervalSec * 1000) {
+                        // Correct for initial packet padding: keep only 1 stage
+                        baseDeep = (existing.deepSleepSeconds > 0 && existing.durationSeconds == 1200 && existing.deepSleepSeconds >= 900) ? 0 : existing.deepSleepSeconds
+                        baseRem = existing.remSleepSeconds
+                        baseLight = existing.lightSleepSeconds
+                        baseAwake = existing.awakeSeconds
+                    } else {
+                        baseDeep = existing.deepSleepSeconds
+                        baseRem = existing.remSleepSeconds
+                        baseLight = existing.lightSleepSeconds
+                        baseAwake = existing.awakeSeconds
+                    }
+                    
+                    let mergedDeep = baseDeep + addDeep
+                    let mergedRem = baseRem + addRem
+                    let mergedLight = baseLight + addLight
+                    let mergedAwake = baseAwake + addAwake
+                    let mergedEfficiency = newDuration > 0 ? Double(newDuration - mergedAwake) / Double(newDuration) : 1.0
+                    
+                    episode = SleepEpisodeRecord(
+                        sessionId: existing.sessionId,
+                        startTime: existing.startTime,
+                        endTime: newEndTimeMs,
+                        durationSeconds: newDuration,
+                        efficiencyRatio: mergedEfficiency,
+                        deepSleepSeconds: mergedDeep,
+                        remSleepSeconds: mergedRem,
+                        lightSleepSeconds: mergedLight,
+                        awakeSeconds: mergedAwake,
+                        lowestHeartRate: existing.lowestHeartRate,
+                        averageHeartRate: existing.averageHeartRate,
+                        averageRmssd: existing.averageRmssd,
+                        temperatureDeviation: existing.temperatureDeviation
+                    )
+                } else {
+                    // Contiguous multi-stage block
+                    var deepSec = 0
+                    var remSec = 0
+                    var lightSec = 0
+                    var awakeSec = 0
+                    for stage in stages {
+                        switch stage {
+                        case .deep: deepSec += intervalSec
+                        case .rem: remSec += intervalSec
+                        case .light: lightSec += intervalSec
+                        case .awake: awakeSec += intervalSec
+                        case .unknown: lightSec += intervalSec
+                        }
+                    }
+                    let totalSec = deepSec + remSec + lightSec + awakeSec
+                    let mergedDuration = existing.durationSeconds + totalSec
+                    let mergedDeep = existing.deepSleepSeconds + deepSec
+                    let mergedRem = existing.remSleepSeconds + remSec
+                    let mergedLight = existing.lightSleepSeconds + lightSec
+                    let mergedAwake = existing.awakeSeconds + awakeSec
+                    let mergedEfficiency = mergedDuration > 0 ? Double(mergedDuration - mergedAwake) / Double(mergedDuration) : 1.0
+                    let mergedEndTime = max(existing.endTime, baseTimestampMs + Int64(totalSec * 1000))
+                    
+                    episode = SleepEpisodeRecord(
+                        sessionId: existing.sessionId,
+                        startTime: existing.startTime,
+                        endTime: mergedEndTime,
+                        durationSeconds: mergedDuration,
+                        efficiencyRatio: mergedEfficiency,
+                        deepSleepSeconds: mergedDeep,
+                        remSleepSeconds: mergedRem,
+                        lightSleepSeconds: mergedLight,
+                        awakeSeconds: mergedAwake,
+                        lowestHeartRate: existing.lowestHeartRate,
+                        averageHeartRate: existing.averageHeartRate,
+                        averageRmssd: existing.averageRmssd,
+                        temperatureDeviation: existing.temperatureDeviation
+                    )
+                }
+            } else {
+                // New episode
+                var deepSec = 0
+                var remSec = 0
+                var lightSec = 0
+                var awakeSec = 0
+                for stage in stages {
+                    switch stage {
+                    case .deep: deepSec += intervalSec
+                    case .rem: remSec += intervalSec
+                    case .light: lightSec += intervalSec
+                    case .awake: awakeSec += intervalSec
+                    case .unknown: lightSec += intervalSec
+                    }
+                }
+                let totalSec = deepSec + remSec + lightSec + awakeSec
+                let efficiency = totalSec > 0 ? Double(totalSec - awakeSec) / Double(totalSec) : 1.0
+                let endTimeMs = baseTimestampMs + Int64(totalSec * 1000)
+                let sessionId = "sleep_\(baseTimestampMs)"
+                
+                episode = SleepEpisodeRecord(
+                    sessionId: sessionId,
+                    startTime: baseTimestampMs,
+                    endTime: endTimeMs,
+                    durationSeconds: totalSec,
+                    efficiencyRatio: efficiency,
+                    deepSleepSeconds: deepSec,
+                    remSleepSeconds: remSec,
+                    lightSleepSeconds: lightSec,
+                    awakeSeconds: awakeSec,
+                    lowestHeartRate: 0,
+                    averageHeartRate: 0.0,
+                    averageRmssd: 0.0,
+                    temperatureDeviation: 0.0
+                )
+            }
             try await database.saveSleepEpisode(episode)
+            _ = try await evaluationEngine.evaluateSleepSession(episode)
             
         default:
             // Other payloads (motion, boot, timeSync) are preserved losslessly in raw_ingestion_log
@@ -163,6 +271,14 @@ public actor SyncCoordinator {
         for event in events {
             try await processEvent(event)
         }
+        // Re-evaluate latest session to ensure all late-arriving biometrics/temperatures are correlated
+        _ = try? await evaluationEngine.evaluateLatestSession()
+    }
+    
+    /// Triggers an on-demand re-evaluation of the latest sleep session in the database.
+    @discardableResult
+    public func evaluateLatestSession() async throws -> DailyEvaluationRecord? {
+        return try await evaluationEngine.evaluateLatestSession()
     }
 }
 

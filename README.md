@@ -78,9 +78,46 @@ We are executing development in structured, test-verified phases:
   * High-throughput transactional batch persistence.
 * Verified with automated test suite: **37 tests passed, 0 failures**.
 
-### ⏳ Phase 5: Deterministic DSP & Biometric Pipelines (Next Up)
-* Real-time rolling 14-day EMA baselines update when new nightly sleep episodes are finalized.
-* Automated computation and persistence of `DailyEvaluationRecord` (readiness score, sleep score, baselines).
+### ✅ Phase 5: Deterministic DSP & Biometric Pipelines (COMPLETED)
+* **Accelerate `vDSP` rMSSD Calculation:** Physiological artifact filtering ($|x_{i+1} - x_i| \le 300\text{ ms}$, $x_i \in [350, 1800]\text{ ms}$) with SIMD vector acceleration.
+* **14-Day Rolling EMA Baselines:** $\alpha = 2/(14+1) \approx 0.1333$ continuous baseline convergence for Resting Heart Rate (RHR) and HRV.
+* **Polysomnography-Aligned Sleep Score ($0 - 100$):** Deterministic 4-component formulation (DEC-016: duration 35, efficiency 30, deep sleep 20, REM sleep 15).
+* **Multi-Factor Readiness Score ($0 - 100$):** Autonomic strain model penalizing elevated RHR, suppressed HRV, nocturnal temperature elevation ($> +0.50^\circ\text{C}$), and sleep efficiency deficits.
+* **Heuristic Sleep Stage Fallback Classifier (DEC-011):** Classifies Awake, Deep, REM, and Light stages from 5-minute heart rate and motion intensity when hardware hypnograms are incomplete.
+* **DailyEvaluationEngine Actor:** Correlates nocturnal biometrics and temperature records with sleep episodes, updates 14-day baselines, evaluates Readiness and Sleep scores, attributes to morning wake-up date (`YYYY-MM-DD`, DEC-016), and persists `DailyEvaluationRecord`.
+* **Verified with automated test suite:** **44 tests passed, 0 failures**.
+
+---
+
+## Deterministic Physiological Formulations
+
+OpenRing computes all wellness scores locally and deterministically using sports science principles and Apple Accelerate (`vDSP`):
+
+### 1. HRV (rMSSD) Calculation
+Given artifact-filtered inter-beat intervals $IBI = [x_1, x_2, \dots, x_N]$ in milliseconds:
+$$\text{rMSSD} = \sqrt{\frac{1}{N-1}\sum_{i=1}^{N-1}(x_{i+1} - x_i)^2}$$
+* **Physiological Rejection:** Beats $x_i < 350\text{ ms}$ (~171 bpm) or $x_i > 1800\text{ ms}$ (~33 bpm), as well as inter-beat jumps $|x_{i+1} - x_i| > 300\text{ ms}$, are filtered out as motion artifacts or ectopic beats.
+
+### 2. 14-Day Rolling Exponential Moving Average (EMA)
+$$\text{Baseline}_t = \alpha \cdot \text{DailyValue}_t + (1 - \alpha) \cdot \text{Baseline}_{t-1}, \quad \text{where } \alpha = \frac{2}{N + 1} = \frac{2}{15} \approx 0.1333$$
+
+### 3. Deterministic Sleep Score ($S_{\text{sleep}} \in [0, 100]$)
+Based on polysomnography and sleep hygiene standards:
+$$S_{\text{sleep}} = P_{\text{duration}} + P_{\text{efficiency}} + P_{\text{deep}} + P_{\text{rem}}$$
+* **Total Duration ($P_{\text{duration}} \in [0, 35]$):** Scales linearly up to 7–9 hours (420–540 minutes). Full 35 points at $\ge 7\text{ hours}$; scales proportionally below.
+* **Sleep Efficiency ($P_{\text{efficiency}} \in [0, 30]$):** Ratio of total sleep time to time in bed. Full 30 points at $\ge 85\%$; scales down linearly below $85\%$.
+* **Deep Sleep ($P_{\text{deep}} \in [0, 20]$):** Target $\ge 1.5\text{ hours}$ (or $\ge 15–20\%$ of total sleep). Full 20 points at $\ge 90\text{ minutes}$.
+* **REM Sleep ($P_{\text{rem}} \in [0, 15]$):** Target $\ge 1.5\text{ hours}$ (or $\ge 20–25\%$ of total sleep). Full 15 points at $\ge 90\text{ minutes}$.
+
+### 4. Deterministic Readiness Score ($S_{\text{readiness}} \in [0, 100]$)
+$$S_{\text{readiness}} = 100 - \left(0.35 \cdot \Delta RHR + 0.35 \cdot \Delta HRV + 0.15 \cdot \Delta Temp + 0.15 \cdot (100 - E_{\text{sleep}})\right)$$
+* $\Delta RHR = \max\left(0, \frac{RHR_{\text{night}} - RHR_{\text{baseline}}}{RHR_{\text{baseline}}}\right) \times 100$
+* $\Delta HRV = \max\left(0, \frac{HRV_{\text{baseline}} - HRV_{\text{night}}}{HRV_{\text{baseline}}}\right) \times 100$
+* $\Delta Temp = \max\left(0, \frac{T_{\text{deviation}} - 0.50^\circ\text{C}}{0.10^\circ\text{C}}\right) \times 10$
+* $E_{\text{sleep}} = \text{SleepEfficiencyPercentage } (0 - 100\%)$
+
+### 5. Daily Evaluation Attribution
+Sleep episodes concluding in the morning (between 04:00 and 14:00) are assigned to the **wake-up date** (`YYYY-MM-DD`), aligning recovery scores with the morning the user wakes up.
 
 ---
 
@@ -107,9 +144,11 @@ openring/
 │   │   └── Protocol/
 │   │       ├── GATTConstants.swift       # Nordic 0x98ED UUIDs & protocol constants
 │   │       └── Packet.swift              # Tag/Length/Payload framing & request builders
-│   ├── OpenRingStorage/                  # SQLite WAL persistence via GRDB.swift
-│   │   ├── DatabaseService.swift         # Thread-safe database actor & migrations
-│   │   └── Models.swift                  # Persisted SQL records
+│   ├── OpenRingStorage/                  # Native SQLite WAL persistence & evaluation pipeline
+│   │   ├── DatabaseService.swift         # Thread-safe SQLite actor & prepared statement range queries
+│   │   ├── Models.swift                  # Pure Swift 6 records (Sendable, Codable, Equatable)
+│   │   ├── SyncCoordinator.swift         # BLE event ingestion actor & lossless raw archiver
+│   │   └── DailyEvaluationEngine.swift   # Post-sleep biometric aggregator & baseline pipeline
 │   ├── OpenRingMock/                     # Virtual peripheral & synthetic telemetry generator
 │   │   ├── MockDataGenerator.swift       # Full night session stream generator
 │   │   └── OuraRingMock.swift            # CBPeripheralManager GATT simulator

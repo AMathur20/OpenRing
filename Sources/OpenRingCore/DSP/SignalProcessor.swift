@@ -83,5 +83,73 @@ public enum SignalProcessor {
         let clampedScore = min(100.0, max(0.0, rawScore))
         return Int(round(clampedScore))
     }
+    
+    // MARK: - Sleep Score Formula
+    
+    /// Computes the nightly Sleep Score (0 - 100) using polysomnography and sleep hygiene standards (DEC-016):
+    /// S_sleep = P_duration (35 pts) + P_efficiency (30 pts) + P_deep (20 pts) + P_rem (15 pts)
+    public static func computeSleepScore(
+        durationSeconds: Int,
+        efficiencyRatio: Double,
+        deepSleepSeconds: Int,
+        remSleepSeconds: Int
+    ) -> Int {
+        // 1. Duration Points (0 - 35): Target 7 - 9 hours (25,200 - 32,400 seconds)
+        let durationHours = Double(durationSeconds) / 3600.0
+        let pDuration = min(35.0, max(0.0, (durationHours / 7.0) * 35.0))
+        
+        // 2. Efficiency Points (0 - 30): Target >= 85% (0.85)
+        let clampedEfficiency = min(1.0, max(0.0, efficiencyRatio))
+        let pEfficiency: Double
+        if clampedEfficiency >= 0.85 {
+            pEfficiency = 30.0
+        } else {
+            pEfficiency = (clampedEfficiency / 0.85) * 30.0
+        }
+        
+        // 3. Deep Sleep Points (0 - 20): Target >= 90 minutes (5,400 seconds)
+        let deepMinutes = Double(deepSleepSeconds) / 60.0
+        let pDeep = min(20.0, max(0.0, (deepMinutes / 90.0) * 20.0))
+        
+        // 4. REM Sleep Points (0 - 15): Target >= 90 minutes (5,400 seconds)
+        let remMinutes = Double(remSleepSeconds) / 60.0
+        let pRem = min(15.0, max(0.0, (remMinutes / 90.0) * 15.0))
+        
+        let total = pDuration + pEfficiency + pDeep + pRem
+        return Int(round(min(100.0, max(0.0, total))))
+    }
+    
+    // MARK: - Sleep Stage Heuristic Fallback
+    
+    /// Open heuristic fallback classifier for gaps in hardware hypnogram reports (DEC-011).
+    public static func classifySleepStageHeuristic(
+        heartRateBpm: Double,
+        baselineRhr: Double,
+        motionIntensity: Double
+    ) -> SleepStage {
+        if motionIntensity > 0.30 {
+            return .awake
+        } else if heartRateBpm <= baselineRhr * 0.95 && motionIntensity < 0.05 {
+            return .deep
+        } else if heartRateBpm > baselineRhr * 1.05 && motionIntensity < 0.15 {
+            return .rem
+        } else {
+            return .light
+        }
+    }
+    
+    /// Reconstructs or estimates sleep stages from a sequence of biometric samples when hardware hypnograms are unavailable (DEC-011).
+    public static func classifySleepStagesHeuristic(
+        samples: [(heartRateBpm: Double, motionIntensity: Double)],
+        baselineRhr: Double
+    ) -> [SleepStage] {
+        return samples.map { sample in
+            classifySleepStageHeuristic(
+                heartRateBpm: sample.heartRateBpm,
+                baselineRhr: baselineRhr,
+                motionIntensity: sample.motionIntensity
+            )
+        }
+    }
 }
 

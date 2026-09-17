@@ -173,6 +173,7 @@ public actor DatabaseService {
                 );
             """, db: db)
             execute(sql: "CREATE INDEX IF NOT EXISTS idx_sleep_start ON \(SleepEpisodeRecord.databaseTableName) (startTime);", db: db)
+            execute(sql: "CREATE INDEX IF NOT EXISTS idx_sleep_end ON \(SleepEpisodeRecord.databaseTableName) (endTime);", db: db)
             
             // 5. Daily Evaluations
             execute(sql: """
@@ -530,6 +531,174 @@ public actor DatabaseService {
             ))
         }
         return results
+    }
+    
+    /// Queries a daily evaluation record for a specific calendar date ('YYYY-MM-DD').
+    public func fetchDailyEvaluation(for date: String) throws -> DailyEvaluationRecord? {
+        guard let db = db else { throw SQLiteStorageError.connectionFailed("Database closed") }
+        let sql = """
+            SELECT evaluationDate, readinessScore, sleepScore, rhrBaseline, hrvBaseline, 
+                   aiSynthesisMarkdown, aiModelTag, generatedAt 
+            FROM \(DailyEvaluationRecord.databaseTableName) 
+            WHERE evaluationDate = ?;
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw SQLiteStorageError.prepareFailed(String(cString: sqlite3_errmsg(db)))
+        }
+        defer { sqlite3_finalize(stmt) }
+        
+        sqlite3_bind_text(stmt, 1, (date as NSString).utf8String, -1, SQLITE_TRANSIENT)
+        
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+        
+        let evalDate = String(cString: sqlite3_column_text(stmt, 0))
+        let readiness = Int(sqlite3_column_int(stmt, 1))
+        let sleep = Int(sqlite3_column_int(stmt, 2))
+        let rhr = sqlite3_column_double(stmt, 3)
+        let hrv = sqlite3_column_double(stmt, 4)
+        let markdown: String? = sqlite3_column_text(stmt, 5).map { String(cString: $0) }
+        let modelTag: String? = sqlite3_column_text(stmt, 6).map { String(cString: $0) }
+        let generatedAt = sqlite3_column_int64(stmt, 7)
+        
+        return DailyEvaluationRecord(
+            evaluationDate: evalDate,
+            readinessScore: readiness,
+            sleepScore: sleep,
+            rhrBaseline: rhr,
+            hrvBaseline: hrv,
+            aiSynthesisMarkdown: markdown,
+            aiModelTag: modelTag,
+            generatedAt: generatedAt
+        )
+    }
+    
+    /// Queries the most recent daily evaluation record strictly before a given date (or latest overall if date is nil).
+    public func fetchLatestDailyEvaluation(before date: String? = nil) throws -> DailyEvaluationRecord? {
+        guard let db = db else { throw SQLiteStorageError.connectionFailed("Database closed") }
+        let sql: String
+        if date != nil {
+            sql = """
+                SELECT evaluationDate, readinessScore, sleepScore, rhrBaseline, hrvBaseline, 
+                       aiSynthesisMarkdown, aiModelTag, generatedAt 
+                FROM \(DailyEvaluationRecord.databaseTableName) 
+                WHERE evaluationDate < ? 
+                ORDER BY evaluationDate DESC 
+                LIMIT 1;
+            """
+        } else {
+            sql = """
+                SELECT evaluationDate, readinessScore, sleepScore, rhrBaseline, hrvBaseline, 
+                       aiSynthesisMarkdown, aiModelTag, generatedAt 
+                FROM \(DailyEvaluationRecord.databaseTableName) 
+                ORDER BY evaluationDate DESC 
+                LIMIT 1;
+            """
+        }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw SQLiteStorageError.prepareFailed(String(cString: sqlite3_errmsg(db)))
+        }
+        defer { sqlite3_finalize(stmt) }
+        
+        if let date = date {
+            sqlite3_bind_text(stmt, 1, (date as NSString).utf8String, -1, SQLITE_TRANSIENT)
+        }
+        
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+        
+        let evalDate = String(cString: sqlite3_column_text(stmt, 0))
+        let readiness = Int(sqlite3_column_int(stmt, 1))
+        let sleep = Int(sqlite3_column_int(stmt, 2))
+        let rhr = sqlite3_column_double(stmt, 3)
+        let hrv = sqlite3_column_double(stmt, 4)
+        let markdown: String? = sqlite3_column_text(stmt, 5).map { String(cString: $0) }
+        let modelTag: String? = sqlite3_column_text(stmt, 6).map { String(cString: $0) }
+        let generatedAt = sqlite3_column_int64(stmt, 7)
+        
+        return DailyEvaluationRecord(
+            evaluationDate: evalDate,
+            readinessScore: readiness,
+            sleepScore: sleep,
+            rhrBaseline: rhr,
+            hrvBaseline: hrv,
+            aiSynthesisMarkdown: markdown,
+            aiModelTag: modelTag,
+            generatedAt: generatedAt
+        )
+    }
+    
+    /// Queries a single sleep episode record by session ID.
+    public func fetchSleepEpisode(sessionId: String) throws -> SleepEpisodeRecord? {
+        guard let db = db else { throw SQLiteStorageError.connectionFailed("Database closed") }
+        let sql = """
+            SELECT sessionId, startTime, endTime, durationSeconds, efficiencyRatio, 
+                   deepSleepSeconds, remSleepSeconds, lightSleepSeconds, awakeSeconds, 
+                   lowestHeartRate, averageHeartRate, averageRmssd, temperatureDeviation 
+            FROM \(SleepEpisodeRecord.databaseTableName) 
+            WHERE sessionId = ?;
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw SQLiteStorageError.prepareFailed(String(cString: sqlite3_errmsg(db)))
+        }
+        defer { sqlite3_finalize(stmt) }
+        
+        sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, SQLITE_TRANSIENT)
+        
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+        
+        return SleepEpisodeRecord(
+            sessionId: String(cString: sqlite3_column_text(stmt, 0)),
+            startTime: sqlite3_column_int64(stmt, 1),
+            endTime: sqlite3_column_int64(stmt, 2),
+            durationSeconds: Int(sqlite3_column_int(stmt, 3)),
+            efficiencyRatio: sqlite3_column_double(stmt, 4),
+            deepSleepSeconds: Int(sqlite3_column_int(stmt, 5)),
+            remSleepSeconds: Int(sqlite3_column_int(stmt, 6)),
+            lightSleepSeconds: Int(sqlite3_column_int(stmt, 7)),
+            awakeSeconds: Int(sqlite3_column_int(stmt, 8)),
+            lowestHeartRate: Int(sqlite3_column_int(stmt, 9)),
+            averageHeartRate: sqlite3_column_double(stmt, 10),
+            averageRmssd: sqlite3_column_double(stmt, 11),
+            temperatureDeviation: sqlite3_column_double(stmt, 12)
+        )
+    }
+    
+    /// Queries the most recent sleep episode record by endTime.
+    public func fetchLatestSleepEpisode() throws -> SleepEpisodeRecord? {
+        guard let db = db else { throw SQLiteStorageError.connectionFailed("Database closed") }
+        let sql = """
+            SELECT sessionId, startTime, endTime, durationSeconds, efficiencyRatio, 
+                   deepSleepSeconds, remSleepSeconds, lightSleepSeconds, awakeSeconds, 
+                   lowestHeartRate, averageHeartRate, averageRmssd, temperatureDeviation 
+            FROM \(SleepEpisodeRecord.databaseTableName) 
+            ORDER BY endTime DESC 
+            LIMIT 1;
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw SQLiteStorageError.prepareFailed(String(cString: sqlite3_errmsg(db)))
+        }
+        defer { sqlite3_finalize(stmt) }
+        
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+        
+        return SleepEpisodeRecord(
+            sessionId: String(cString: sqlite3_column_text(stmt, 0)),
+            startTime: sqlite3_column_int64(stmt, 1),
+            endTime: sqlite3_column_int64(stmt, 2),
+            durationSeconds: Int(sqlite3_column_int(stmt, 3)),
+            efficiencyRatio: sqlite3_column_double(stmt, 4),
+            deepSleepSeconds: Int(sqlite3_column_int(stmt, 5)),
+            remSleepSeconds: Int(sqlite3_column_int(stmt, 6)),
+            lightSleepSeconds: Int(sqlite3_column_int(stmt, 7)),
+            awakeSeconds: Int(sqlite3_column_int(stmt, 8)),
+            lowestHeartRate: Int(sqlite3_column_int(stmt, 9)),
+            averageHeartRate: sqlite3_column_double(stmt, 10),
+            averageRmssd: sqlite3_column_double(stmt, 11),
+            temperatureDeviation: sqlite3_column_double(stmt, 12)
+        )
     }
     
     /// Queries the latest raw ingestion packets.
