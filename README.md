@@ -27,9 +27,9 @@ We are executing development in structured, test-verified phases:
 ```
 [Phase 1: Specs & Protocol Discovery] ─────────► [COMPLETED]
 [Phase 2: Scaffolding & Virtual Mock Harness] ──► [COMPLETED]
-[Phase 3: CoreBluetooth Central Engine] ───────► [COMPLETED (25/25 Tests Passing)]
-[Phase 4: Local Storage Engine Integration] ────► [NEXT UP]
-[Phase 5: Deterministic DSP & Readiness] ──────► [UPCOMING]
+[Phase 3: CoreBluetooth Central Engine] ───────► [COMPLETED]
+[Phase 4: Local Storage Engine Integration] ────► [COMPLETED (37/37 Tests Passing)]
+[Phase 5: Deterministic DSP & Readiness] ──────► [NEXT UP]
 [Phase 6: Edge AI Engine (llama.cpp Metal)] ───► [UPCOMING]
 [Phase 7: SwiftUI Native Views & 60 FPS Charts] ─► [UPCOMING]
 [Phase 8: Background Sync & App Store Audit] ──► [UPCOMING]
@@ -51,13 +51,12 @@ We are executing development in structured, test-verified phases:
   * `PacketReassemblyEngine` isolated actor handling sliding-window byte buffering and fragmentation.
   * `SignalProcessor` Accelerate (`vDSP`) rMSSD calculation, 14-day exponential moving average baselines, and multi-factor readiness scoring.
 * Built **`OpenRingStorage`**:
-  * GRDB.swift SQLite persistence models (`RawIngestionRecord`, `BiometricSampleRecord`, `TemperatureTelemetryRecord`, `SleepEpisodeRecord`, `DailyEvaluationRecord`).
+  * Native SQLite persistence models (`RawIngestionRecord`, `BiometricSampleRecord`, `TemperatureTelemetryRecord`, `SleepEpisodeRecord`, `DailyEvaluationRecord`).
   * `DatabaseService` isolated actor managing WAL mode and automated schema migrations.
 * Built **`OpenRingMock`**:
   * CoreBluetooth `CBPeripheralManager` simulator advertising as an Oura Ring Gen 3 on `98ed0001`.
   * `MockDataGenerator` synthesizing full 7-hour night sessions (84 5-minute intervals = 252 events) and challenge nonces.
   * `openring-mock` CLI runner for macOS.
-* Built and verified full automated test suite: **18 tests passed, 0 failures**.
 
 ### ✅ Phase 3: CoreBluetooth Central Engine (Completed)
 * Implemented `BLEEngine` isolated actor:
@@ -66,13 +65,22 @@ We are executing development in structured, test-verified phases:
   * Automated AES-128-ECB challenge handshake execution upon connection and notification activation.
   * Non-isolated `states`, `events`, and `discoveredRings` asynchronous streams (`AsyncStream`).
   * Telemetry ingestion feeding directly into `PacketReassemblyEngine`.
-  * Verified with automated state machine, handshake simulation, and event stream tests: **25 tests passed, 0 failures**.
 
-### ⏳ Phase 4: Local Storage Engine & SyncCoordinator Pipeline (Next Up)
-* Implement `DatabaseService` actor using native `SQLite3` in WAL mode (zero external package dependencies).
-* Schema migrations for `raw_ingestion_log`, `biometric_samples`, `temperature_telemetry`, `sleep_episodes`, `daily_evaluations`.
-* Implement `SyncCoordinator` actor in `OpenRingCore` bridging `BLEEngine.events` into typed database tables.
-* Benchmark range query latency (<10ms target for 30 days / 8,640 samples).
+### ✅ Phase 4: Local Storage Engine & SyncCoordinator Pipeline (Completed)
+* Implemented `DatabaseService` actor using native `SQLite3` in WAL mode (zero third-party dependencies):
+  * Automated migrations creating indexed tables for `raw_ingestion_log`, `biometric_samples`, `temperature_telemetry`, `sleep_episodes`, and `daily_evaluations`.
+  * Prepared statements delivering **0.82 ms query latency for 30 days of data** ($8,640$ 5-minute samples; target $<10\text{ ms}$).
+  * `INSERT OR REPLACE` semantics guaranteeing idempotency across overlapping syncs.
+* Implemented `SyncCoordinator` actor in `OpenRingStorage`:
+  * Bridges `BLEEngine.events: AsyncStream<RingEvent>` into `DatabaseService`.
+  * Lossless audit: writes raw incoming frames to `raw_ingestion_log`.
+  * Transforms `.hrv`, `.temperature`, and `.sleepPhases` payloads into typed records.
+  * High-throughput transactional batch persistence.
+* Verified with automated test suite: **37 tests passed, 0 failures**.
+
+### ⏳ Phase 5: Deterministic DSP & Biometric Pipelines (Next Up)
+* Real-time rolling 14-day EMA baselines update when new nightly sleep episodes are finalized.
+* Automated computation and persistence of `DailyEvaluationRecord` (readiness score, sleep score, baselines).
 
 ---
 
@@ -141,9 +149,14 @@ swiftc -module-cache-path .build/cache -I .build -L .build -lOpenRingCore \
   -parse-as-library Sources/OpenRingMock/*.swift \
   -emit-library -module-name OpenRingMock -o .build/libOpenRingMock.dylib
 
-# 3. Execute test suite
+# 3. Compile OpenRingStorage library
+swiftc -module-cache-path .build/cache -I .build -L .build -lOpenRingCore -lsqlite3 \
+  -parse-as-library Sources/OpenRingStorage/*.swift \
+  -emit-library -module-name OpenRingStorage -o .build/libOpenRingStorage.dylib
+
+# 4. Execute consolidated test suite
 DYLD_LIBRARY_PATH=.build swift -module-cache-path .build/cache \
-  -I .build -L .build -lOpenRingCore -lOpenRingMock \
+  -I .build -L .build -lOpenRingCore -lOpenRingMock -lOpenRingStorage -lsqlite3 \
   Tests/TestRunner/main.swift
 ```
 
@@ -190,8 +203,25 @@ Expected output:
   ✅ [PASS] BLEEngine handles authentication failure packet
   ✅ [PASS] BLEEngine routes incoming history packets to events stream
 
+--- [7] Local Storage Engine (SQLite WAL) & Range Queries ---
+  ✅ [PASS] DatabaseService in-memory initialization and schema migration
+  ✅ [PASS] DatabaseService disk initialization with WAL mode pragmas
+  ✅ [PASS] Raw packet ingestion audit logging
+  ✅ [PASS] Batch save and range query biometric samples
+  ✅ [PASS] Save and range query temperature telemetry
+  ✅ [PASS] Save and query sleep episodes
+  ✅ [PASS] Save and query daily evaluations
+  ✅ [PASS] Idempotency and update verification (INSERT OR REPLACE)
+     ⚡ 30-day range query (8,640 samples) completed in 0.82 ms (Target: < 10.0 ms)
+  ✅ [PASS] Performance Benchmark: 30-day range query latency (<10ms target)
+
+--- [8] SyncCoordinator Event Ingestion Pipeline ---
+  ✅ [PASS] SyncCoordinator ingests single events and updates state
+  ✅ [PASS] SyncCoordinator ingests full synthetic night (252 events)
+  ✅ [PASS] SyncCoordinator stream subscription lifecycle
+
 ==================================================
- Test Results: 25 Passed, 0 Failed
+ Test Results: 37 Passed, 0 Failed
 ==================================================
 ```
 

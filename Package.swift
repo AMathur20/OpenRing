@@ -25,9 +25,7 @@ let package = Package(
             targets: ["MockRunner"]
         )
     ],
-    dependencies: [
-        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0")
-    ],
+    dependencies: [],
     targets: [
         // Core protocol, cryptography, event decoders, packet reassembly & DSP
         .target(
@@ -39,12 +37,11 @@ let package = Package(
             ]
         ),
 
-        // Persistence layer: SQLite via GRDB.swift (WAL mode)
+        // Persistence layer: SQLite WAL mode via Apple libsqlite3 (zero external dependencies)
         .target(
             name: "OpenRingStorage",
             dependencies: [
-                "OpenRingCore",
-                .product(name: "GRDB", package: "GRDB.swift")
+                "OpenRingCore"
             ],
             path: "Sources/OpenRingStorage",
             swiftSettings: [

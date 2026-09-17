@@ -1,7 +1,7 @@
 import Foundation
-import GRDB
 
-public struct RawIngestionRecord: Codable, FetchableRecord, PersistableRecord, Sendable, Equatable {
+/// Lossless raw immutable packet record stored in `raw_ingestion_log`.
+public struct RawIngestionRecord: Codable, Sendable, Equatable, Identifiable {
     public static let databaseTableName = "raw_ingestion_log"
     
     public var id: Int64?
@@ -19,9 +19,11 @@ public struct RawIngestionRecord: Codable, FetchableRecord, PersistableRecord, S
     }
 }
 
-public struct BiometricSampleRecord: Codable, FetchableRecord, PersistableRecord, Sendable, Equatable {
+/// 5-minute interval biometric sample stored in `biometric_samples`.
+public struct BiometricSampleRecord: Codable, Sendable, Equatable, Identifiable {
     public static let databaseTableName = "biometric_samples"
     
+    public var id: Int64 { timestamp }
     public let timestamp: Int64 // Unix Epoch ms
     public let heartRateBpm: Double
     public let rmssdMs: Double
@@ -37,9 +39,11 @@ public struct BiometricSampleRecord: Codable, FetchableRecord, PersistableRecord
     }
 }
 
-public struct TemperatureTelemetryRecord: Codable, FetchableRecord, PersistableRecord, Sendable, Equatable {
+/// Nocturnal skin temperature sample stored in `temperature_telemetry`.
+public struct TemperatureTelemetryRecord: Codable, Sendable, Equatable, Identifiable {
     public static let databaseTableName = "temperature_telemetry"
     
+    public var id: Int64 { timestamp }
     public let timestamp: Int64 // Unix Epoch ms
     public let rawCelsius: Double
     public let baselineOffsetCelsius: Double
@@ -51,9 +55,11 @@ public struct TemperatureTelemetryRecord: Codable, FetchableRecord, PersistableR
     }
 }
 
-public struct SleepEpisodeRecord: Codable, FetchableRecord, PersistableRecord, Sendable, Equatable {
+/// Classified sleep episode record stored in `sleep_episodes`.
+public struct SleepEpisodeRecord: Codable, Sendable, Equatable, Identifiable {
     public static let databaseTableName = "sleep_episodes"
     
+    public var id: String { sessionId }
     public let sessionId: String
     public let startTime: Int64
     public let endTime: Int64
@@ -99,9 +105,11 @@ public struct SleepEpisodeRecord: Codable, FetchableRecord, PersistableRecord, S
     }
 }
 
-public struct DailyEvaluationRecord: Codable, FetchableRecord, PersistableRecord, Sendable, Equatable {
+/// Daily computed readiness and sleep score aggregate stored in `daily_evaluations`.
+public struct DailyEvaluationRecord: Codable, Sendable, Equatable, Identifiable {
     public static let databaseTableName = "daily_evaluations"
     
+    public var id: String { evaluationDate }
     public let evaluationDate: String // 'YYYY-MM-DD'
     public let readinessScore: Int
     public let sleepScore: Int
@@ -131,4 +139,3 @@ public struct DailyEvaluationRecord: Codable, FetchableRecord, PersistableRecord
         self.generatedAt = generatedAt
     }
 }
-

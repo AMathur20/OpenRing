@@ -1,6 +1,7 @@
 import Foundation
 import OpenRingCore
 import OpenRingMock
+import OpenRingStorage
 
 @MainActor
 func runAllTests() async {
@@ -394,6 +395,303 @@ func runAllTests() async {
         } else {
             fatalError("Expected .hrv payload")
         }
+    }
+    
+    // MARK: - [7] Local Storage Engine (SQLite WAL) & Range Queries
+    print("\n--- [7] Local Storage Engine (SQLite WAL) & Range Queries ---")
+    
+    await runTest("DatabaseService in-memory initialization and schema migration") {
+        let db = try DatabaseService(inMemory: true)
+        let evals = try await db.fetchLatestDailyEvaluations()
+        assert(evals.isEmpty, "New database should have no daily evaluations")
+    }
+    
+    await runTest("DatabaseService disk initialization with WAL mode pragmas") {
+        let tempDir = NSTemporaryDirectory()
+        let tempPath = (tempDir as NSString).appendingPathComponent("test_openring_\(UUID().uuidString).sqlite")
+        defer {
+            try? FileManager.default.removeItem(atPath: tempPath)
+            try? FileManager.default.removeItem(atPath: tempPath + "-wal")
+            try? FileManager.default.removeItem(atPath: tempPath + "-shm")
+        }
+        
+        let db = try DatabaseService(customPath: tempPath)
+        let path = await db.databasePath
+        assert(path == tempPath, "Database path should match custom path")
+        assert(FileManager.default.fileExists(atPath: tempPath), "SQLite file must exist on disk")
+    }
+    
+    await runTest("Raw packet ingestion audit logging") {
+        let db = try DatabaseService(inMemory: true)
+        let payload = Data([0x01, 0x02, 0x03, 0x04])
+        let raw = RawIngestionRecord(
+            receivedTimestamp: 1715000000000,
+            packetType: 0x5D,
+            sequenceId: 1,
+            framePayload: payload
+        )
+        try await db.saveRawPacket(raw)
+        
+        let fetched = try await db.fetchRawPackets(limit: 10)
+        assert(fetched.count == 1, "Expected 1 raw record")
+        assert(fetched[0].packetType == 0x5D)
+        assert(fetched[0].sequenceId == 1)
+        assert(fetched[0].framePayload == payload)
+    }
+    
+    await runTest("Batch save and range query biometric samples") {
+        let db = try DatabaseService(inMemory: true)
+        let samples = (0..<10).map { i in
+            BiometricSampleRecord(
+                timestamp: 1000 + Int64(i * 300_000),
+                heartRateBpm: 50.0 + Double(i),
+                rmssdMs: 60.0 + Double(i),
+                motionIntensity: 0.1 * Double(i),
+                ppgSignalQuality: 0.95
+            )
+        }
+        try await db.saveBiometricSamples(samples)
+        
+        let fetched = try await db.fetchBiometrics(from: 1000 + 300_000, to: 1000 + 3 * 300_000)
+        assert(fetched.count == 3, "Expected 3 samples in range")
+        assert(fetched[0].heartRateBpm == 51.0)
+        assert(fetched[1].heartRateBpm == 52.0)
+        assert(fetched[2].heartRateBpm == 53.0)
+    }
+    
+    await runTest("Save and range query temperature telemetry") {
+        let db = try DatabaseService(inMemory: true)
+        let temps = (0..<5).map { i in
+            TemperatureTelemetryRecord(
+                timestamp: 2000 + Int64(i * 300_000),
+                rawCelsius: 34.0 + Double(i) * 0.1,
+                baselineOffsetCelsius: Double(i) * 0.05
+            )
+        }
+        try await db.saveTemperatureRecords(temps)
+        
+        let fetched = try await db.fetchTemperature(from: 2000, to: 2000 + 2 * 300_000)
+        assert(fetched.count == 3, "Expected 3 temperature records")
+        assert(abs(fetched[0].rawCelsius - 34.0) < 0.001)
+        assert(abs(fetched[1].rawCelsius - 34.1) < 0.001)
+    }
+    
+    await runTest("Save and query sleep episodes") {
+        let db = try DatabaseService(inMemory: true)
+        let episode = SleepEpisodeRecord(
+            sessionId: "sleep_session_100",
+            startTime: 10000,
+            endTime: 35200,
+            durationSeconds: 25200,
+            efficiencyRatio: 0.88,
+            deepSleepSeconds: 5400,
+            remSleepSeconds: 4800,
+            lightSleepSeconds: 12000,
+            awakeSeconds: 3000,
+            lowestHeartRate: 48,
+            averageHeartRate: 52.5,
+            averageRmssd: 68.0,
+            temperatureDeviation: -0.15
+        )
+        try await db.saveSleepEpisode(episode)
+        
+        let fetched = try await db.fetchSleepEpisodes(from: 5000, to: 15000)
+        assert(fetched.count == 1, "Expected 1 sleep episode")
+        assert(fetched[0].sessionId == "sleep_session_100")
+        assert(fetched[0].lowestHeartRate == 48)
+        assert(fetched[0].deepSleepSeconds == 5400)
+        assert(fetched[0].efficiencyRatio == 0.88)
+    }
+    
+    await runTest("Save and query daily evaluations") {
+        let db = try DatabaseService(inMemory: true)
+        let eval = DailyEvaluationRecord(
+            evaluationDate: "2026-09-17",
+            readinessScore: 92,
+            sleepScore: 88,
+            rhrBaseline: 51.2,
+            hrvBaseline: 64.5,
+            aiSynthesisMarkdown: "Optimal autonomic recovery detected.",
+            aiModelTag: "Llama-3.2-3B-Instruct-Q4_K_M",
+            generatedAt: 1715000000
+        )
+        try await db.saveDailyEvaluation(eval)
+        
+        let fetched = try await db.fetchLatestDailyEvaluations(limit: 5)
+        assert(fetched.count == 1, "Expected 1 daily evaluation")
+        assert(fetched[0].evaluationDate == "2026-09-17")
+        assert(fetched[0].readinessScore == 92)
+        assert(fetched[0].aiSynthesisMarkdown == "Optimal autonomic recovery detected.")
+    }
+    
+    await runTest("Idempotency and update verification (INSERT OR REPLACE)") {
+        let db = try DatabaseService(inMemory: true)
+        let s1 = BiometricSampleRecord(
+            timestamp: 50000,
+            heartRateBpm: 55.0,
+            rmssdMs: 60.0,
+            motionIntensity: 0.1,
+            ppgSignalQuality: 0.9
+        )
+        try await db.saveBiometricSamples([s1])
+        
+        // Re-insert with updated heart rate and rmssd at same timestamp
+        let s1Updated = BiometricSampleRecord(
+            timestamp: 50000,
+            heartRateBpm: 52.0,
+            rmssdMs: 65.0,
+            motionIntensity: 0.1,
+            ppgSignalQuality: 0.95
+        )
+        try await db.saveBiometricSamples([s1Updated])
+        
+        let fetched = try await db.fetchBiometrics(from: 40000, to: 60000)
+        assert(fetched.count == 1, "Duplicate timestamp must replace existing record")
+        assert(fetched[0].heartRateBpm == 52.0, "Updated heart rate must overwrite original")
+        assert(fetched[0].rmssdMs == 65.0, "Updated RMSSD must overwrite original")
+    }
+    
+    await runTest("Performance Benchmark: 30-day range query latency (<10ms target)") {
+        let db = try DatabaseService(inMemory: true)
+        // 30 days of 5-minute intervals = 30 * 24 * 12 = 8,640 samples
+        let sampleCount = 8640
+        var samples: [BiometricSampleRecord] = []
+        samples.reserveCapacity(sampleCount)
+        let baseTime: Int64 = 1700000000000
+        
+        for i in 0..<sampleCount {
+            samples.append(BiometricSampleRecord(
+                timestamp: baseTime + Int64(i * 300_000),
+                heartRateBpm: 50.0 + Double(i % 30),
+                rmssdMs: 60.0 + Double(i % 40),
+                motionIntensity: 0.1,
+                ppgSignalQuality: 0.98
+            ))
+        }
+        
+        try await db.saveBiometricSamples(samples)
+        
+        // Benchmark range query over entire 30 days
+        let startTime = DispatchTime.now()
+        let fetched = try await db.fetchBiometrics(from: baseTime, to: baseTime + Int64(sampleCount * 300_000))
+        let endTime = DispatchTime.now()
+        
+        let elapsedNanos = endTime.uptimeNanoseconds - startTime.uptimeNanoseconds
+        let elapsedMs = Double(elapsedNanos) / 1_000_000.0
+        
+        assert(fetched.count == sampleCount, "Expected all 8,640 samples returned")
+        print("     ⚡ 30-day range query (8,640 samples) completed in \(String(format: "%.2f", elapsedMs)) ms (Target: < 10.0 ms)")
+        assert(elapsedMs < 10.0, "Query latency exceeded 10ms budget: \(elapsedMs) ms")
+    }
+    
+    // MARK: - [8] SyncCoordinator Event Ingestion Pipeline
+    print("\n--- [8] SyncCoordinator Event Ingestion Pipeline ---")
+    
+    await runTest("SyncCoordinator ingests single events and updates state") {
+        let db = try DatabaseService(inMemory: true)
+        let coordinator = SyncCoordinator(database: db)
+        
+        let hrvEvent = RingEvent(
+            tag: 0x5D,
+            name: "hrv_event",
+            timestampDeciseconds: 400000,
+            rawBody: Data([54, 62]),
+            payload: .hrv(samples: [HRVSample(averageHeartRateBpm: 54, averageRmssdMs: 62)])
+        )
+        let tempEvent = RingEvent(
+            tag: 0x46,
+            name: "temp_event",
+            timestampDeciseconds: 400000,
+            rawBody: Data([0x0D, 0x16]),
+            payload: .temperature(temperaturesCelsius: [33.5])
+        )
+        let sleepEvent = RingEvent(
+            tag: 0x4B,
+            name: "sleep_event",
+            timestampDeciseconds: 400000,
+            rawBody: Data([0xE4]),
+            payload: .sleepPhases(stages: [.deep, .light, .rem, .awake])
+        )
+        
+        try await coordinator.processEvents([hrvEvent, tempEvent, sleepEvent])
+        
+        let count = await coordinator.eventsProcessedCount
+        assert(count == 3, "Expected 3 events processed")
+        
+        let rawLogs = try await db.fetchRawPackets(limit: 10)
+        assert(rawLogs.count == 3, "All 3 events must be losslessly logged")
+        
+        let biometrics = try await db.fetchBiometrics(from: 0, to: 50000000)
+        assert(biometrics.count == 1, "Expected 1 biometric record from HRV event")
+        assert(biometrics[0].heartRateBpm == 54.0)
+        assert(biometrics[0].rmssdMs == 62.0)
+        
+        let temps = try await db.fetchTemperature(from: 0, to: 50000000)
+        assert(temps.count == 1, "Expected 1 temperature record")
+        assert(abs(temps[0].rawCelsius - 33.5) < 0.001)
+        
+        let episodes = try await db.fetchSleepEpisodes(from: 0, to: 50000000)
+        assert(episodes.count == 1, "Expected 1 sleep episode")
+        assert(episodes[0].deepSleepSeconds == 300)
+        assert(episodes[0].awakeSeconds == 300)
+    }
+    
+    await runTest("SyncCoordinator ingests full synthetic night (252 events)") {
+        let generator = MockDataGenerator()
+        let fullNightStream = generator.generateFullNightStream()
+        
+        let reassembler = PacketReassemblyEngine()
+        let events = await reassembler.ingestAndExtractEvents(fullNightStream)
+        assert(events.count >= 252, "Expected at least 252 night events")
+        
+        let db = try DatabaseService(inMemory: true)
+        let coordinator = SyncCoordinator(database: db)
+        
+        try await coordinator.processEvents(events)
+        
+        let processed = await coordinator.eventsProcessedCount
+        assert(processed == events.count, "Coordinator should process all events")
+        
+        let allBiometrics = try await db.fetchBiometrics(from: 0, to: Int64.max)
+        assert(allBiometrics.count == 84, "Expected 84 5-minute biometric intervals in DB")
+        
+        let allTemps = try await db.fetchTemperature(from: 0, to: Int64.max)
+        assert(allTemps.count == 84, "Expected 84 temperature records in DB")
+        
+        let allRaw = try await db.fetchRawPackets(limit: 500)
+        assert(allRaw.count == events.count, "All raw event frames must be losslessly stored")
+    }
+    
+    await runTest("SyncCoordinator stream subscription lifecycle") {
+        let db = try DatabaseService(inMemory: true)
+        let coordinator = SyncCoordinator(database: db)
+        
+        var continuation: AsyncStream<RingEvent>.Continuation?
+        let stream = AsyncStream<RingEvent> { continuation = $0 }
+        
+        await coordinator.startSync(from: stream)
+        let isSyncing = await coordinator.isSyncing
+        assert(isSyncing == true, "Coordinator should be syncing")
+        
+        let testEvent = RingEvent(
+            tag: 0x5D,
+            name: "hrv_event",
+            timestampDeciseconds: 500000,
+            rawBody: Data([56, 68]),
+            payload: .hrv(samples: [HRVSample(averageHeartRateBpm: 56, averageRmssdMs: 68)])
+        )
+        continuation?.yield(testEvent)
+        continuation?.finish()
+        
+        // Give background Task time to process yielded event
+        try await Task.sleep(nanoseconds: 50_000_000)
+        
+        await coordinator.stopSync()
+        let finalSyncing = await coordinator.isSyncing
+        assert(finalSyncing == false, "Coordinator should be stopped")
+        
+        let count = await coordinator.eventsProcessedCount
+        assert(count == 1, "Yielded event should be processed")
     }
     
     print("\n==================================================")

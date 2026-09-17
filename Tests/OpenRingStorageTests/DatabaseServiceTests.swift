@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import OpenRingStorage
 
-@Suite("SQLite GRDB WAL Storage Tests")
+@Suite("SQLite WAL Storage Tests")
 struct DatabaseServiceTests {
     
     @Test("Database initialization in memory and migration execution")
