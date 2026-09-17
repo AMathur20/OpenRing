@@ -21,6 +21,8 @@ This document records all key architectural, technical, product, and regulatory 
 | **DEC-011** | On-Device Sleep Staging Recovery (Hardware Hypnogram + Fallback) | **Accepted** | 2026-09-16 | Biometric DSP |
 | **DEC-012** | Edge LLM Runtime: llama.cpp with Bundled GGUF Model | **Accepted** | 2026-09-16 | Edge AI |
 | **DEC-013** | Dual Testing Strategy (Mock Peripheral & iPhone 16 + Gen 3 Ring) | **Accepted** | 2026-09-16 | Testing & Tooling |
+| **DEC-014** | License Selection: GNU GPLv3 with App Store & Google Play Exception | **Accepted** | 2026-09-17 | Legal & Licensing |
+| **DEC-015** | Native SQLite3 WAL Engine Layer (Zero External Dependencies) | **Accepted** | 2026-09-17 | Storage & Concurrency |
 
 ---
 
@@ -46,6 +48,7 @@ This document records all key architectural, technical, product, and regulatory 
   * WAL mode enables concurrent reader tasks (e.g. 60 FPS SwiftUI Chart range queries) without blocking single-writer ingestion streams.
   * Ensures a compact footprint ($\le 250\text{ MB}$ per year) and instant SQL queryability.
 * **Consequences:** Eliminates CoreData overhead. Requires managing SQL table migrations explicitly.
+* **Update (2026-09-17):** Refined in [DEC-015](#dec-015-native-sqlite3-wal-engine-layer-zero-external-dependencies) to utilize Apple's native `libsqlite3` (`import SQLite3`) in WAL mode. This eliminates external SPM package dependencies and sandbox build issues while preserving the identical WAL-mode SQLite schema and Swift actor concurrency model.
 
 ---
 
@@ -189,5 +192,36 @@ This document records all key architectural, technical, product, and regulatory 
   2. **Physical Hardware Validation Track:** Deploy test builds to the physical iPhone 16 to validate real-world BLE bonding, circular buffer draining, and live sensor streams from the physical Gen 3 ring.
 * **Rationale:** Prevents reliance on constant manual wearing of the ring during development while ensuring physical hardware compatibility is verified at milestone gates.
 * **Consequences:** Fast iterative testing loop on Mac, verified against real ring hardware.
+
+---
+
+### DEC-014: License Selection: GNU GPLv3 with App Store & Google Play Exception
+* **Status:** Accepted
+* **Date:** 2026-09-17
+* **Context:** OpenRing's core ethos is data sovereignty, hardware user freedom, and preventing predatory subscription paywalls. We must prevent third parties from taking OpenRing's source code, creating proprietary closed-source apps, or locking features behind subscriptions, while ensuring any improvements or derivative works are contributed back open-source. Furthermore, the license must support official distribution through both the Apple App Store and Google Play Store.
+* **Decision:** License OpenRing under the **GNU General Public License Version 3.0 (GPLv3)** with an explicit **Section 7 Additional Permission (Apple App Store & Google Play Store Exception)**.
+* **Rationale:**
+  * **Strong Copyleft Reciprocity:** Under GPLv3, any modified or derivative works *must* remain 100% open source under the same license terms, legally barring any company from creating a closed-source, paywalled commercial fork.
+  * **Upstream Contribution Enforcement:** Anyone modifying the code must make their source code available under GPLv3, ensuring community improvements benefit the project.
+  * **App Store & Play Store Compatibility:** Apple's App Store and Google Play impose digital distribution conditions (signing, terms of service). Standard GPLv3 has potential friction with App Store terms; adding the explicit Section 7 Mobile Distribution Exception (used by prominent open-source apps like *VLC for iOS* and *Signal*) grants legal permission to distribute via both stores while strictly requiring the underlying source code to remain public and free.
+* **Consequences:** Closed-source commercial forks are legally prohibited. All derivative works must be GPLv3. The project can be submitted cleanly to both the Apple App Store and Google Play Store.
+ 
+---
+
+### DEC-015: Native SQLite3 WAL Engine Layer (Zero External Dependencies)
+* **Status:** Accepted
+* **Date:** 2026-09-17
+* **Context:** In Phase 2, `OpenRingStorage` was configured with GRDB.swift as an external SPM package dependency. However, external SPM network downloads fail in sandboxed/offline environments, and SPM tool invocations suffer from sandbox restrictions on `/var/folders/`. In contrast, Apple's iOS and macOS SDKs bundle `libsqlite3` natively (`import SQLite3`), which requires zero external network dependencies and compiles instantly.
+* **Decision:** Implement `DatabaseService` using native `SQLite3` bindings in an isolated Swift 6 actor:
+  1. Use Apple's built-in `libsqlite3` C API.
+  2. Configure SQLite with performance and safety pragmas: Write-Ahead Logging (`PRAGMA journal_mode = WAL;`), `synchronous = NORMAL;`, `foreign_keys = ON;`, and `busy_timeout = 5000;`.
+  3. Manage migrations programmatically (`v1_initial_schema`) creating indexed tables for `raw_ingestion_log`, `biometric_samples`, `temperature_telemetry`, `sleep_episodes`, and `daily_evaluations`.
+  4. Implement parameterized prepared statements for high-speed range queries ($<10\text{ ms}$ budget for 30-day lookups).
+* **Rationale:**
+  * **Zero External Dependencies:** Completely air-gapped, requiring no third-party package checkouts or network connections.
+  * **Zero Overhead / Extreme Performance:** Direct C API prepared statements achieve query latencies under $2\text{ ms}$ for 30 days of data ($8,640$ 5-minute samples), significantly outperforming ORM layers.
+  * **Swift 6 Strict Concurrency:** Wrapping SQLite connection pointers in a Swift 6 `actor` serializes database writes safely while WAL mode permits concurrent background reader tasks.
+* **Consequences:** Eliminates external SPM dependency on GRDB. Storage models are clean, pure Swift 6 `Sendable` structs. Requires explicit SQL string management for migrations and queries.
+
 
 

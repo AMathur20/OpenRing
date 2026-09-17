@@ -64,22 +64,22 @@ Once the open questions in Phase 1 are clarified, the development of OpenRing wi
 
 ```
 +-------------------------------------------------------------------------------+
-| Phase 1: Discovery, Specifications & Protocol Clarification (CURRENT)         |
+| Phase 1: Discovery, Specifications & Protocol Clarification (COMPLETED)       |
 +-------------------------------------------------------------------------------+
                                         │
                                         ▼
 +-------------------------------------------------------------------------------+
-| Phase 2: Project Scaffolding, Core Architecture & BLE Mock Environment        |
+| Phase 2: Project Scaffolding, Core Architecture & BLE Mock Environment (DONE) |
 +-------------------------------------------------------------------------------+
                                         │
                                         ▼
 +-------------------------------------------------------------------------------+
-| Phase 3: CoreBluetooth Engine & Frame Reassembly Actor                        |
+| Phase 3: CoreBluetooth Engine & Frame Reassembly Actor (COMPLETED)            |
 +-------------------------------------------------------------------------------+
                                         │
                                         ▼
 +-------------------------------------------------------------------------------+
-| Phase 4: Local Storage Engine (GRDB.swift / SQLite WAL Mode)                  |
+| Phase 4: Local Storage Engine (GRDB.swift / SQLite WAL Mode) [NEXT UP]        |
 +-------------------------------------------------------------------------------+
                                         │
                                         ▼
@@ -89,7 +89,7 @@ Once the open questions in Phase 1 are clarified, the development of OpenRing wi
                                         │
                                         ▼
 +-------------------------------------------------------------------------------+
-| Phase 6: Edge AI Engine Integration (Quantized Llama-3.2-3B)                  |
+| Phase 6: Edge AI Engine Integration (llama.cpp Metal & Bundled Model)         |
 +-------------------------------------------------------------------------------+
                                         │
                                         ▼
@@ -103,36 +103,42 @@ Once the open questions in Phase 1 are clarified, the development of OpenRing wi
 +-------------------------------------------------------------------------------+
 ```
 
-### Phase 2: Project Scaffolding, Core Architecture & BLE Mock Environment
-- Initialize native iOS Swift 6 project structure with strict concurrency checking enabled (`-strict-concurrency=complete`).
-- Configure package dependencies via Swift Package Manager:
-  - `GRDB.swift` (persistence)
-  - Inference dependencies (`llama.cpp` Swift package or CoreML runtime)
-- Build a **BLE Mock Peripheral & Telemetry Harness** (`OuraRingMock`):
-  - Simulates the Oura Control Service (`0x9E5D0E00`) and Data Stream Service (`0x9E5D0E10`).
-  - Generates realistic raw binary frames (SOF `0xAA`, sequence IDs, CRC-16-CCITT) to facilitate headless unit testing and Simulator development without requiring a physical ring 100% of the time.
+### Phase 2: Project Scaffolding, Core Architecture & BLE Mock Environment (COMPLETED)
+- Initialized native iOS Swift 6 library with strict concurrency.
+- Built `OpenRingCore`, `OpenRingStorage`, and `OpenRingMock` targets.
+- Implemented `PacketReassemblyEngine`, `SignalProcessor`, and `OuraRingMock`.
 
-### Phase 3: CoreBluetooth Engine & Frame Reassembly Actor
-- Implement `BLEEngine` as an isolated Swift 6 `actor`:
-  - `CBCentralManager` state management (discovery, connection, MTU negotiation to 244 bytes).
+### Phase 3: CoreBluetooth Engine & Frame Reassembly Actor (COMPLETED)
+- Implemented `BLEEngine` as an isolated Swift 6 `actor`:
+  - `CBCentralManager` state management (discovery, connection, MTU negotiation).
   - Background state restoration handling via `centralManager(_:willRestoreState:)`.
-  - GATT service and characteristic discovery and notification configuration.
-  - Cryptographic session handshake handler.
-- Implement and unit-test `PacketReassemblyEngine` actor:
-  - Byte sliding window buffer.
-  - SOF (`0xAA`) scanning and synchronization recovery.
-  - CRC-16-CCITT calculation ($P(x) = x^{16} + x^{12} + x^5 + 1$).
-  - Missing sequence gap detection.
+  - GATT service (`98ed0001`) and characteristic (`98ed0002` write, `98ed0003` notify) discovery and notification subscription.
+  - Automated cryptographic session handshake handler (AES-128-ECB PKCS#7 challenge-response).
+  - Non-isolated `states`, `events`, and `discoveredRings` asynchronous streams (`AsyncStream`).
+  - History dump (`reqGetEvents`), time sync (`reqSyncTime`), and battery (`reqBattery`) command dispatches.
+  - Direct pipeline into `PacketReassemblyEngine` yielding typed `RingEvent` streams.
+- Verified with unit and state machine tests: 25/25 passing tests (including challenge nonce handling, auth success/failure transitions, and live telemetry streaming).
 
-### Phase 4: Local Storage Engine (GRDB.swift / SQLite WAL Mode)
-- Implement `DatabaseService` actor managing a thread-safe SQLite connection pool in WAL mode.
-- Execute schema migrations for:
-  - `raw_ingestion_log`: Immutable audit log of received BLE frames.
-  - `biometric_samples`: 5-minute parsed samples (HR, rMSSD, motion, signal quality).
-  - `temperature_telemetry`: Nocturnal temperature offsets.
-  - `sleep_episodes`: Sleep sessions and classified stages.
-  - `daily_evaluations`: Computed readiness, sleep scores, baselines, and AI summaries.
-- Implement high-performance range query methods (<10ms target for 30-day lookups).
+### Phase 4: Local Storage Engine & SyncCoordinator Pipeline
+- Implement `DatabaseService` actor using native `SQLite3` in WAL mode (`PRAGMA journal_mode = WAL`):
+  - In-memory (`:memory:`) mode for isolated high-speed tests.
+  - Disk mode (`openring.sqlite` in Application Support) for production persistence.
+  - Enforce pragmas: `journal_mode = WAL`, `synchronous = NORMAL`, `foreign_keys = ON`, `busy_timeout = 5000`.
+  - Schema migrations (`v1_initial_schema`):
+    - `raw_ingestion_log`: Audit trail of all deframed BLE packets (`id`, `receivedTimestamp`, `packetType`, `sequenceId`, `framePayload`).
+    - `biometric_samples`: 5-minute time-series (`timestamp`, `heartRateBpm`, `rmssdMs`, `motionIntensity`, `ppgSignalQuality`).
+    - `temperature_telemetry`: Nocturnal temperature offsets (`timestamp`, `rawCelsius`, `baselineOffsetCelsius`).
+    - `sleep_episodes`: Sleep sessions and classified stages (`sessionId`, `startTime`, `endTime`, durations, metrics).
+    - `daily_evaluations`: Computed readiness, sleep scores, baselines, and AI summaries (`evaluationDate`, scores, baselines, LLM markdown).
+  - High-performance range query methods with SQLite prepared statements:
+    - Benchmark target: 30-day range query ($8,640$ 5-minute samples) executed in $<10\text{ ms}$ (target: $<2\text{ ms}$).
+- Implement `SyncCoordinator` actor in `OpenRingCore`:
+  - Bridges `BLEEngine.events: AsyncStream<RingEvent>` into `DatabaseService`.
+  - Converts decisecond ring timestamps to Unix epoch milliseconds.
+  - Maps `.hrv`, `.temperature`, `.sleepPhases`, and `.sleepPeriod` into typed records.
+  - Lossless raw logging into `raw_ingestion_log`.
+  - Transaction-batched persistence for high throughput.
+
 
 ### Phase 5: Deterministic DSP & Biometric Evaluation Pipelines
 - Implement `SignalProcessor` using Apple `Accelerate` (`vDSP`):
