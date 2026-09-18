@@ -79,22 +79,22 @@ Once the open questions in Phase 1 are clarified, the development of OpenRing wi
                                         │
                                         ▼
 +-------------------------------------------------------------------------------+
-| Phase 4: Local Storage Engine (GRDB.swift / SQLite WAL Mode) [NEXT UP]        |
+| Phase 4: Local Storage Engine (Native SQLite3 WAL Mode) (COMPLETED)           |
 +-------------------------------------------------------------------------------+
                                         │
                                         ▼
 +-------------------------------------------------------------------------------+
-| Phase 5: Deterministic DSP & Biometric Evaluation Pipelines                  |
+| Phase 5: Deterministic DSP & Biometric Evaluation Pipelines (COMPLETED)       |
 +-------------------------------------------------------------------------------+
                                         │
                                         ▼
 +-------------------------------------------------------------------------------+
-| Phase 6: Edge AI Engine Integration (llama.cpp Metal & Bundled Model)         |
+| Phase 6: Edge AI Engine Integration (llama.cpp Metal & Bundled Model) (DONE)  |
 +-------------------------------------------------------------------------------+
                                         │
                                         ▼
 +-------------------------------------------------------------------------------+
-| Phase 7: Native SwiftUI Views & Interactive 60 FPS Charts                     |
+| Phase 7: Native SwiftUI Views & Interactive 60 FPS Charts [NEXT UP]           |
 +-------------------------------------------------------------------------------+
                                         │
                                         ▼
@@ -161,17 +161,24 @@ Once the open questions in Phase 1 are clarified, the development of OpenRing wi
   - Automatically triggers post-sleep evaluation upon batch sync completion.
 - Verified with automated test suite: **44/44 passing tests**.
 
-### Phase 6: Edge AI Engine Integration (llama.cpp Metal & Bundled Llama-3.2-3B)
-- Integrate `llama.cpp` via Swift Package Manager with Metal GPU backend.
-- Bundle `Llama-3.2-3B-Instruct-Q4_K_M.gguf` (~1.45 GB) directly in the app bundle (with an architecture ready for v2 custom model swapping).
-- Implement `LLMInferenceService` actor:
-  - Model lifecycle management (lazy instantiation, unloading under memory warnings).
-  - Prompt construction with structured biometric markdown tables.
-  - Strictly non-diagnostic functional wellness system prompt enforcing the 3-paragraph format (<140 words).
-  - Token streaming interface via Swift `AsyncStream<String>`.
-  - Foreground-only execution gate (blocking execution during background sync to prevent jetsam memory eviction).
+### Phase 6: Edge AI Engine Integration (llama.cpp Metal & Bundled Llama-3.2-3B) (COMPLETED)
+- Implemented `OpenRingAI` module with Swift 6 strict concurrency (`-strict-concurrency=complete`):
+  - **`InferenceBackend` Protocol:** Sendable abstraction (`isLoaded`, `modelTag`, `loadModel(at:)`, `unloadModel()`, `generate(prompt:maxTokens:) -> AsyncStream<String>`).
+  - **`PromptBuilder` Pipeline:**
+    - Deterministic Llama-3.2 instruct template with special tokens (`<|begin_of_text|>`, `<|start_header_id|>`, etc.).
+    - Strictly non-diagnostic system prompt enforcing functional sports science framing (DEC-005) and 3-paragraph format under 140 words.
+    - Structured biometric status markdown table comparing nightly resting heart rate, HRV rMSSD, total sleep, deep sleep, REM sleep, thermal deviation, Readiness score, and Sleep score against 14-day rolling baselines.
+  - **`MockInferenceBackend` Actor:** Deterministic token stream generator for sub-second, hermetic CI/unit testing (DEC-017).
+  - **`LlamaCppBackend` Actor:** Direct integration layer for Metal GPU-accelerated GGUF inference on Apple Silicon with weight file validation.
+  - **`LLMInferenceService` Actor:**
+    - Lifecycle management for model initialization, unloading, and active busy state tracking.
+    - **Foreground Jetsam Defense Gate (DEC-007, DEC-017):** Checks application lifecycle (`isForeground`). Immediately rejects inference with `InferenceError.backgroundExecutionBlocked` if triggered during background execution.
+    - Live token streaming via Swift `AsyncStream<String>`.
+    - Automated persistence to SQLite WAL: commits completed synthesis markdown directly to `DailyEvaluationRecord.aiSynthesisMarkdown` in `DatabaseService`.
+- Created automated download helper script: [`scripts/download_model.sh`](file:///Users/ankurmathur/Documents/openring/scripts/download_model.sh) to fetch `Llama-3.2-3B-Instruct-Q4_K_M.gguf` via resumable `curl`.
+- Verified with automated test suite: **51/51 passing tests (7 Phase 6 tests)**.
 
-### Phase 7: Native SwiftUI Views & Interactive 60 FPS Charts
+### Phase 7: Native SwiftUI Views & Interactive 60 FPS Charts [NEXT UP]
 - Build SwiftUI user interface matching the architectural blueprint:
   - **Daily Readiness View:** Radial readiness score gauge, baseline delta badges, autonomic strain indicators.
   - **Sleep Architecture View:** Interactive SwiftUI Charts rendering Awake, REM, Light, and Deep stages with pinch/pan navigation at 60 FPS.

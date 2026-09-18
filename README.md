@@ -28,10 +28,10 @@ We are executing development in structured, test-verified phases:
 [Phase 1: Specs & Protocol Discovery] ─────────► [COMPLETED]
 [Phase 2: Scaffolding & Virtual Mock Harness] ──► [COMPLETED]
 [Phase 3: CoreBluetooth Central Engine] ───────► [COMPLETED]
-[Phase 4: Local Storage Engine Integration] ────► [COMPLETED (37/37 Tests Passing)]
-[Phase 5: Deterministic DSP & Readiness] ──────► [NEXT UP]
-[Phase 6: Edge AI Engine (llama.cpp Metal)] ───► [UPCOMING]
-[Phase 7: SwiftUI Native Views & 60 FPS Charts] ─► [UPCOMING]
+[Phase 4: Local Storage Engine Integration] ────► [COMPLETED]
+[Phase 5: Deterministic DSP & Readiness] ──────► [COMPLETED (44/44 Tests Passing)]
+[Phase 6: Edge AI Engine (llama.cpp Metal)] ───► [COMPLETED (51/51 Tests Passing)]
+[Phase 7: SwiftUI Native Views & 60 FPS Charts] ─► [NEXT UP]
 [Phase 8: Background Sync & App Store Audit] ──► [UPCOMING]
 ```
 
@@ -87,6 +87,17 @@ We are executing development in structured, test-verified phases:
 * **DailyEvaluationEngine Actor:** Correlates nocturnal biometrics and temperature records with sleep episodes, updates 14-day baselines, evaluates Readiness and Sleep scores, attributes to morning wake-up date (`YYYY-MM-DD`, DEC-016), and persists `DailyEvaluationRecord`.
 * **Verified with automated test suite:** **44 tests passed, 0 failures**.
 
+### ✅ Phase 6: Edge AI Engine Integration (COMPLETED)
+* **Swift 6 Strict Concurrency Architecture (`OpenRingAI`):** Built fully isolated edge inference subsystem using native actors (`MockInferenceBackend`, `LlamaCppBackend`, `LLMInferenceService`).
+* **Non-Diagnostic Sports Science System Prompt (DEC-005, DEC-012):** Deterministic Llama-3.2 instruct template comparing nightly resting heart rate, HRV rMSSD, total sleep, deep sleep, REM sleep, thermal deviation, and scores against 14-day baselines in a structured markdown table. Enforces a strict 3-paragraph format under 140 words.
+* **Foreground Jetsam Defense Gate (DEC-007, DEC-017):** Strict application lifecycle check (`isForeground`) preventing memory allocation or model loading in the background, safeguarding against iOS 30–60 MB Jetsam eviction.
+* **Dual-Backend Support (DEC-017):**
+  * `LlamaCppBackend`: Metal GPU-accelerated execution of bundled `Llama-3.2-3B-Instruct-Q4_K_M.gguf` with file integrity and minimum size checks.
+  * `MockInferenceBackend`: Hermetic, sub-second token streaming actor for offline CI environments.
+* **Automated SQLite WAL Persistence:** Live token streaming via `AsyncStream<String>` with automatic commitment to `DailyEvaluationRecord.aiSynthesisMarkdown` upon completion.
+* **Model Download Automation:** Provided [`scripts/download_model.sh`](scripts/download_model.sh) for resumable acquisition of the 4-bit quantized GGUF model weights (~1.45 GB).
+* **Verified with automated test suite:** **51 tests passed, 0 failures (7 Phase 6 tests)**.
+
 ---
 
 ## Deterministic Physiological Formulations
@@ -126,10 +137,12 @@ Sleep episodes concluding in the morning (between 04:00 and 14:00) are assigned 
 ```
 openring/
 ├── README.md                             # Project overview & status
-├── Decisions Log.md                      # Architecture Decision Records (DEC-001 - DEC-013)
+├── Decisions Log.md                      # Architecture Decision Records (DEC-001 - DEC-017)
 ├── Implementation Plan.md                # 8-Phase implementation roadmap & specs
 ├── OpenRing App Engineering Docs.md      # Unified PRD & Technical Design Document
 ├── Package.swift                         # Swift 6 package manifest
+├── scripts/
+│   └── download_model.sh                 # Resumable curl download for Llama-3.2-3B GGUF weights
 ├── Sources/
 │   ├── OpenRingCore/                     # Core protocol, crypto, decoders, reassembly & DSP
 │   │   ├── Crypto/
@@ -149,6 +162,15 @@ openring/
 │   │   ├── Models.swift                  # Pure Swift 6 records (Sendable, Codable, Equatable)
 │   │   ├── SyncCoordinator.swift         # BLE event ingestion actor & lossless raw archiver
 │   │   └── DailyEvaluationEngine.swift   # Post-sleep biometric aggregator & baseline pipeline
+│   ├── OpenRingAI/                       # Edge AI inference engine & non-diagnostic prompt pipeline
+│   │   ├── Backend/
+│   │   │   ├── InferenceBackend.swift    # Abstract backend protocol & InferenceError enum
+│   │   │   ├── MockInferenceBackend.swift# Hermetic token streaming actor for sub-second offline testing
+│   │   │   └── LlamaCppBackend.swift     # Metal GPU accelerated llama.cpp runner for GGUF weights
+│   │   ├── Prompt/
+│   │   │   └── PromptBuilder.swift       # Llama-3.2 instruct template & biometric table formatter
+│   │   └── Service/
+│   │       └── LLMInferenceService.swift # Foreground Jetsam defense gate & SQLite auto-persistence
 │   ├── OpenRingMock/                     # Virtual peripheral & synthetic telemetry generator
 │   │   ├── MockDataGenerator.swift       # Full night session stream generator
 │   │   └── OuraRingMock.swift            # CBPeripheralManager GATT simulator
@@ -157,7 +179,8 @@ openring/
 └── Tests/
     ├── OpenRingCoreTests/                # Unit test suites for protocol, crypto, decoders, DSP
     ├── OpenRingMockTests/                # Tests for synthetic data & mock peripheral
-    ├── OpenRingStorageTests/             # Tests for GRDB SQLite tables & range queries
+    ├── OpenRingStorageTests/             # Tests for SQLite tables, range queries, ingestion
+    ├── OpenRingAITests/                  # Tests for edge AI engine, Jetsam gates, prompt tables
     └── TestRunner/
         └── main.swift                    # Consolidated test executor
 ```
@@ -171,7 +194,7 @@ openring/
 * Swift 6.0+ (Command Line Tools or Xcode 16+)
 
 ### Run Automated Tests
-To build and execute the full test suite verifying framing, AES-128 cryptography, event decoders, DSP algorithms, and mock generation:
+To build and execute the full test suite verifying framing, AES-128 cryptography, event decoders, DSP algorithms, SQLite WAL persistence, evaluation pipelines, and edge AI inference:
 
 ```bash
 # 1. Compile OpenRingCore dynamic library
@@ -193,9 +216,14 @@ swiftc -module-cache-path .build/cache -I .build -L .build -lOpenRingCore -lsqli
   -parse-as-library Sources/OpenRingStorage/*.swift \
   -emit-library -module-name OpenRingStorage -o .build/libOpenRingStorage.dylib
 
-# 4. Execute consolidated test suite
+# 4. Compile OpenRingAI library
+swiftc -module-cache-path .build/cache -I .build -L .build -lOpenRingCore -lOpenRingStorage -lsqlite3 \
+  -parse-as-library Sources/OpenRingAI/Backend/*.swift Sources/OpenRingAI/Prompt/*.swift Sources/OpenRingAI/Service/*.swift \
+  -emit-library -module-name OpenRingAI -o .build/libOpenRingAI.dylib
+
+# 5. Execute consolidated test suite
 DYLD_LIBRARY_PATH=.build swift -module-cache-path .build/cache \
-  -I .build -L .build -lOpenRingCore -lOpenRingMock -lOpenRingStorage -lsqlite3 \
+  -I .build -L .build -lOpenRingCore -lOpenRingMock -lOpenRingStorage -lOpenRingAI -lsqlite3 \
   Tests/TestRunner/main.swift
 ```
 
@@ -227,6 +255,9 @@ Expected output:
   ✅ [PASS] Artifact filtering in rMSSD computation
   ✅ [PASS] Exponential Moving Average 14-day update
   ✅ [PASS] Readiness score bounds and penalty calculation
+  ✅ [PASS] Sleep score mathematical bounds and component weights (DEC-016)
+  ✅ [PASS] Open heuristic sleep stage fallback classifier (DEC-011)
+  ✅ [PASS] 14-day EMA multi-day convergence progression
 
 --- [5] Virtual BLE Mock & Synthetic Stream Generator ---
   ✅ [PASS] Synthetic challenge nonce is 15 bytes
@@ -251,7 +282,7 @@ Expected output:
   ✅ [PASS] Save and query sleep episodes
   ✅ [PASS] Save and query daily evaluations
   ✅ [PASS] Idempotency and update verification (INSERT OR REPLACE)
-     ⚡ 30-day range query (8,640 samples) completed in 0.82 ms (Target: < 10.0 ms)
+     ⚡ 30-day range query (8,640 samples) completed in 0.71 ms (Target: < 10.0 ms)
   ✅ [PASS] Performance Benchmark: 30-day range query latency (<10ms target)
 
 --- [8] SyncCoordinator Event Ingestion Pipeline ---
@@ -259,9 +290,34 @@ Expected output:
   ✅ [PASS] SyncCoordinator ingests full synthetic night (252 events)
   ✅ [PASS] SyncCoordinator stream subscription lifecycle
 
+--- [9] DailyEvaluationEngine & End-to-End Evaluation Pipeline ---
+  ✅ [PASS] DatabaseService targeted queries for evaluations and sleep sessions
+  ✅ [PASS] DailyEvaluationEngine correlates biometrics, temperature, and computes scores
+  ✅ [PASS] DailyEvaluationEngine multi-day baseline tracking across consecutive nights
+  ✅ [PASS] End-to-End Pipeline: Synthetic night ingestion automatically evaluates scores and baselines in SQLite
+
+--- [10] Edge AI Engine (LLMInferenceService & Prompt Pipeline) ---
+  ✅ [PASS] PromptBuilder formats valid Llama-3.2 instruct template with biometric table
+  ✅ [PASS] PromptBuilder system prompt enforces non-diagnostic constraints and 3-paragraph format
+  ✅ [PASS] MockInferenceBackend lifecycle management
+  ✅ [PASS] LLMInferenceService foreground Jetsam safety gate
+  ✅ [PASS] LLMInferenceService token streaming and output formatting (<140 words, 3 paragraphs)
+  ✅ [PASS] End-to-End Edge AI Synthesis Pipeline with SQLite WAL
+  ✅ [PASS] LlamaCppBackend weight file validation
+
 ==================================================
- Test Results: 37 Passed, 0 Failed
+ Test Results: 51 Passed, 0 Failed
 ==================================================
+```
+
+### Download Quantized Model Weights (Physical Device Inference)
+The unit test suite runs completely hermetically and offline in sub-second time using `MockInferenceBackend` without needing the model weights. For running Metal GPU inference on physical Apple Silicon hardware:
+
+```bash
+chmod +x scripts/download_model.sh
+./scripts/download_model.sh
+```
+This downloads `Llama-3.2-3B-Instruct-Q4_K_M.gguf` (~1.45 GB) into the `Models/` directory via resumable `curl`.
 ```
 
 ### Run the Virtual BLE Ring Peripheral

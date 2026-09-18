@@ -20,6 +20,10 @@ let package = Package(
             name: "OpenRingMock",
             targets: ["OpenRingMock"]
         ),
+        .library(
+            name: "OpenRingAI",
+            targets: ["OpenRingAI"]
+        ),
         .executable(
             name: "openring-mock",
             targets: ["MockRunner"]
@@ -54,6 +58,19 @@ let package = Package(
             name: "OpenRingMock",
             dependencies: ["OpenRingCore"],
             path: "Sources/OpenRingMock",
+            swiftSettings: [
+                .swiftLanguageMode(.v6)
+            ]
+        ),
+
+        // On-device Edge AI: quantized Llama-3.2-3B-Instruct inference engine & recovery synthesis
+        .target(
+            name: "OpenRingAI",
+            dependencies: [
+                "OpenRingCore",
+                "OpenRingStorage"
+            ],
+            path: "Sources/OpenRingAI",
             swiftSettings: [
                 .swiftLanguageMode(.v6)
             ]
@@ -94,6 +111,20 @@ let package = Package(
             name: "OpenRingMockTests",
             dependencies: ["OpenRingMock"],
             path: "Tests/OpenRingMockTests",
+            swiftSettings: [
+                .swiftLanguageMode(.v6)
+            ]
+        ),
+
+        // Unit tests for Edge AI engine, prompt builder & inference pipeline
+        .testTarget(
+            name: "OpenRingAITests",
+            dependencies: [
+                "OpenRingAI",
+                "OpenRingCore",
+                "OpenRingStorage"
+            ],
+            path: "Tests/OpenRingAITests",
             swiftSettings: [
                 .swiftLanguageMode(.v6)
             ]

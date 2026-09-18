@@ -24,6 +24,7 @@ This document records all key architectural, technical, product, and regulatory 
 | **DEC-014** | License Selection: GNU GPLv3 with App Store & Google Play Exception | **Accepted** | 2026-09-17 | Legal & Licensing |
 | **DEC-015** | Native SQLite3 WAL Engine Layer (Zero External Dependencies) | **Accepted** | 2026-09-17 | Storage & Concurrency |
 | **DEC-016** | Deterministic Sleep Score Math & Morning Wake-Up Attribution | **Accepted** | 2026-09-17 | Biometric DSP & Scoring |
+| **DEC-017** | Dual-Backend Edge AI Engine & Foreground Jetsam Defense | **Accepted** | 2026-09-18 | Edge AI & Testing |
 
 ---
 
@@ -242,6 +243,19 @@ This document records all key architectural, technical, product, and regulatory 
 * **Rationale:** Adheres to established sports physiology and clinical sleep hygiene metrics while remaining strictly non-diagnostic and offline.
 * **Consequences:** Provides consistent, reproducible scores across all platforms without depending on opaque proprietary cloud algorithms.
 
+---
 
-
-
+### DEC-017: Dual-Backend Edge AI Engine & Foreground Jetsam Defense
+* **Status:** Accepted
+* **Date:** 2026-09-18
+* **Context:** Running `Llama-3.2-3B-Instruct` on iOS requires balancing two critical engineering constraints:
+  1. **iOS Background Memory Ceiling (Jetsam):** Background BLE syncing operates under strict 30–60 MB memory limits. Allocating ~1.5–1.85 GB RAM for a model during background sync triggers an immediate `SIGKILL` by the iOS kernel.
+  2. **Hermetic, Sub-Second CI Testing:** The test harness must run instantaneously in resource-constrained CI or offline developer environments without requiring a 1.45 GB GGUF weight download or high-end GPU hardware.
+* **Decision:** Implement a dual-backend edge AI architecture in `OpenRingAI`:
+  1. **`InferenceBackend` Protocol:** Abstract backend interface (`isLoaded`, `modelTag`, `loadModel(at:)`, `unloadModel()`, `generate(prompt:maxTokens:) -> AsyncStream<String>`).
+  2. **`MockInferenceBackend` (Swift 6 Actor):** Hermetic backend simulating deterministic token streams formatted strictly as 3 paragraphs (<140 words) adhering to non-diagnostic sports science boundaries. Enables sub-second unit and integration testing without downloading model weights.
+  3. **`LlamaCppBackend` (Swift 6 Actor):** Metal GPU-accelerated edge inference backend wrapping `llama.cpp` for physical hardware execution with GGUF weight validation and memory safety checks.
+  4. **Foreground Jetsam Defense Gate:** `LLMInferenceService` strictly checks application lifecycle state (`isForeground`). If invoked when `isForeground == false`, it immediately throws `InferenceError.backgroundExecutionBlocked` before any memory allocation or model loading can occur.
+  5. **Automated SQLite WAL Persistence:** Generated recovery syntheses are streamed live via `AsyncStream<String>` and automatically committed to `DailyEvaluationRecord.aiSynthesisMarkdown` in `DatabaseService` upon completion.
+* **Rationale:** Completely eliminates background Jetsam termination risks, guarantees fast offline CI test execution, and maintains strict separation between runtime inference and local data persistence.
+* **Consequences:** Tests execute in <1s without network or large binaries. Physical deployment uses `scripts/download_model.sh` to acquire weights for on-device Metal acceleration.

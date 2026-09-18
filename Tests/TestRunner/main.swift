@@ -2,6 +2,7 @@ import Foundation
 import OpenRingCore
 import OpenRingMock
 import OpenRingStorage
+import OpenRingAI
 
 @MainActor
 func runAllTests() async {
@@ -1011,6 +1012,186 @@ func runAllTests() async {
         assert(eval.readinessScore >= 90, "Readiness score should be high for nominal synthetic vitals, got \(eval.readinessScore)")
         assert(eval.rhrBaseline == 50.0, "Initial RHR baseline should match night RHR of 50.0")
         assert(eval.hrvBaseline > 60.0, "Initial HRV baseline should match night HRV")
+    }
+    
+    // MARK: - Edge AI Engine (LLMInferenceService & Prompt Pipeline)
+    print("\n--- [10] Edge AI Engine (LLMInferenceService & Prompt Pipeline) ---")
+    
+    await runTest("PromptBuilder formats valid Llama-3.2 instruct template with biometric table") {
+        let eval = DailyEvaluationRecord(
+            evaluationDate: "2026-05-08",
+            readinessScore: 62,
+            sleepScore: 74,
+            rhrBaseline: 52.0,
+            hrvBaseline: 65.0,
+            generatedAt: 1000
+        )
+        let episode = SleepEpisodeRecord(
+            sessionId: "night_session_test",
+            startTime: 1000,
+            endTime: 26200000,
+            durationSeconds: 26200,
+            efficiencyRatio: 0.88,
+            deepSleepSeconds: 4200, // 70 min (<90 min)
+            remSleepSeconds: 4800,  // 80 min (<90 min)
+            lightSleepSeconds: 15400,
+            awakeSeconds: 1800,
+            lowestHeartRate: 58,    // elevated vs baseline 52
+            averageHeartRate: 61.0,
+            averageRmssd: 44.0,     // suppressed vs baseline 65
+            temperatureDeviation: 0.55 // elevated
+        )
+        let prompt = PromptBuilder.buildPrompt(evaluation: eval, episode: episode)
+        
+        assert(PromptBuilder.validatePromptStructure(prompt), "Prompt must conform to structure validator")
+        assert(prompt.hasPrefix("<|begin_of_text|><|start_header_id|>system<|end_header_id|>"), "Prompt must start with Llama-3.2 BOS and system header")
+        assert(prompt.contains("<|start_header_id|>assistant<|end_header_id|>"), "Prompt must terminate ready for assistant generation")
+        assert(prompt.contains("| Resting Heart Rate (RHR) | 58 bpm | 52 bpm | Elevated (+6 bpm) |"))
+        assert(prompt.contains("Suppressed"), "HRV should be labeled as suppressed")
+        assert(prompt.contains("Elevated (Strain)"), "Thermal deviation >= +0.50 should indicate strain")
+    }
+    
+    await runTest("PromptBuilder system prompt enforces non-diagnostic constraints and 3-paragraph format") {
+        let systemPrompt = PromptBuilder.systemPrompt
+        assert(systemPrompt.contains("without diagnostic claims or clinical hedging"), "System prompt must forbid diagnostic claims")
+        assert(systemPrompt.contains("1. Autonomic Load"), "Must require Autonomic Load paragraph")
+        assert(systemPrompt.contains("2. Sleep Architecture"), "Must require Sleep Architecture paragraph")
+        assert(systemPrompt.contains("3. Actionable Recovery Protocol"), "Must require Actionable Protocol paragraph")
+        assert(systemPrompt.contains("under 140 words"), "Must specify word limit under 140 words")
+    }
+    
+    await runTest("MockInferenceBackend lifecycle management") {
+        let backend = MockInferenceBackend(isLoadedInitially: false)
+        let initialLoaded = await backend.isLoaded
+        assert(!initialLoaded, "Backend should initially not be loaded")
+        
+        do {
+            _ = try await backend.generate(prompt: "test")
+            fatalError("Should throw modelNotLoaded")
+        } catch let err as InferenceError {
+            assert(err == .modelNotLoaded, "Expected modelNotLoaded error")
+        }
+        
+        try await backend.loadModel(at: "Models/mock.gguf")
+        let loadedState = await backend.isLoaded
+        assert(loadedState, "Backend should be loaded after loadModel")
+        
+        await backend.unloadModel()
+        let unloadedState = await backend.isLoaded
+        assert(!unloadedState, "Backend should be unloaded after unloadModel")
+    }
+    
+    await runTest("LLMInferenceService foreground Jetsam safety gate") {
+        let backend = MockInferenceBackend(isLoadedInitially: true)
+        let db = try DatabaseService(inMemory: true)
+        
+        // Background state
+        let service = LLMInferenceService(backend: backend, database: db, isForeground: false)
+        let isFg = await service.isForeground
+        assert(!isFg, "Service should be marked background")
+        
+        // Synthesis should be blocked in background
+        do {
+            _ = try await service.synthesizeDailyRecovery(for: "2026-05-08")
+            fatalError("Background synthesis should be rejected")
+        } catch let err as InferenceError {
+            assert(err == .backgroundExecutionBlocked, "Expected backgroundExecutionBlocked error")
+        }
+        
+        // Custom prompt streaming should also be blocked in background
+        do {
+            _ = try await service.streamCustomPrompt("test")
+            fatalError("Background prompt should be rejected")
+        } catch let err as InferenceError {
+            assert(err == .backgroundExecutionBlocked, "Expected backgroundExecutionBlocked error")
+        }
+        
+        // Restore foreground
+        await service.setForeground(true)
+        let restoredFg = await service.isForeground
+        assert(restoredFg, "Service should now be foreground")
+    }
+    
+    await runTest("LLMInferenceService token streaming and output formatting (<140 words, 3 paragraphs)") {
+        let backend = MockInferenceBackend(isLoadedInitially: true)
+        let service = LLMInferenceService(backend: backend, isForeground: true)
+        
+        let stream = try await service.streamCustomPrompt("Computed Biometric Status: Critical Recovery")
+        var accumulated = ""
+        var tokenCount = 0
+        
+        for await token in stream {
+            accumulated.append(token)
+            tokenCount += 1
+        }
+        
+        assert(tokenCount > 5, "Stream should yield multiple tokens")
+        assert(!accumulated.isEmpty, "Accumulated text must not be empty")
+        
+        // Check paragraph count (3 paragraphs separated by \n\n)
+        let paragraphs = accumulated.components(separatedBy: "\n\n").filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        assert(paragraphs.count == 3, "Output must contain exactly 3 paragraphs, got \(paragraphs.count)")
+        
+        // Check word count constraint (<140 words)
+        let words = accumulated.split(whereSeparator: { $0.isWhitespace })
+        assert(words.count < 140, "Word count must be under 140 words, got \(words.count)")
+        
+        // Check non-diagnostic tone
+        assert(!accumulated.contains("diagnose") && !accumulated.contains("disease"), "Output must not contain clinical diagnostic claims")
+    }
+    
+    await runTest("End-to-End Edge AI Synthesis Pipeline with SQLite WAL") {
+        let db = try DatabaseService(inMemory: true)
+        let backend = MockInferenceBackend(isLoadedInitially: true)
+        let service = LLMInferenceService(backend: backend, database: db, isForeground: true)
+        
+        let evalDate = "2026-05-08"
+        let evalRecord = DailyEvaluationRecord(
+            evaluationDate: evalDate,
+            readinessScore: 82,
+            sleepScore: 90,
+            rhrBaseline: 51.0,
+            hrvBaseline: 64.0,
+            aiSynthesisMarkdown: nil, // initially ungenerated
+            aiModelTag: nil,
+            generatedAt: 1000
+        )
+        try await db.saveDailyEvaluation(evalRecord)
+        
+        // Execute synthesis
+        let stream = try await service.synthesizeDailyRecovery(for: evalDate)
+        var tokenBuffer = ""
+        for await token in stream {
+            tokenBuffer.append(token)
+        }
+        
+        assert(!tokenBuffer.isEmpty, "Stream must deliver generated text")
+        
+        // Give background write task a brief moment to commit to SQLite
+        try await Task.sleep(nanoseconds: 50_000_000)
+        
+        // Fetch updated evaluation record from SQLite
+        let updatedEval = try await db.fetchDailyEvaluation(for: evalDate)
+        assert(updatedEval?.aiSynthesisMarkdown != nil, "aiSynthesisMarkdown must be populated in SQLite")
+        assert(updatedEval?.aiSynthesisMarkdown == tokenBuffer, "Persisted markdown must match streamed tokens")
+        assert(updatedEval?.aiModelTag == backend.modelTag, "aiModelTag must match backend modelTag")
+    }
+    
+    await runTest("LlamaCppBackend weight file validation") {
+        let backend = LlamaCppBackend()
+        let isInitiallyLoaded = await backend.isLoaded
+        assert(!isInitiallyLoaded)
+        
+        do {
+            try await backend.loadModel(at: "/nonexistent/path/model.gguf")
+            fatalError("Should fail for nonexistent model path")
+        } catch let err as InferenceError {
+            if case .modelLoadFailed(let msg) = err {
+                assert(msg.contains("does not exist"))
+            } else {
+                fatalError("Unexpected error type: \(err)")
+            }
+        }
     }
     
     print("\n==================================================")
