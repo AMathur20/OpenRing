@@ -35,11 +35,21 @@ struct OpenRingApp: App {
             
             // 4. Initialize Edge AI Engine (Metal GPU backend with model path)
             let backend = LlamaCppBackend(modelTag: "Llama-3.2-3B-Instruct-Q4_K_M")
-            self.inferenceService = LLMInferenceService(
+            let infService = LLMInferenceService(
                 backend: backend,
                 database: db,
                 isForeground: true
             )
+            self.inferenceService = infService
+            
+            // Locate model in Bundle or local Models/ directory
+            let modelPath = Bundle.main.path(forResource: "Llama-3.2-3B-Instruct-Q4_K_M", ofType: "gguf")
+                ?? (FileManager.default.fileExists(atPath: "Models/Llama-3.2-3B-Instruct-Q4_K_M.gguf") ? "Models/Llama-3.2-3B-Instruct-Q4_K_M.gguf" : nil)
+            if let path = modelPath {
+                Task {
+                    try? await infService.loadModel(at: path)
+                }
+            }
             
             // 5. Connect BLE event stream to SyncCoordinator in background task
             Task {

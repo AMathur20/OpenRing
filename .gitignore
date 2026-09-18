@@ -1,0 +1,21 @@
+# Xcode & Swift
+.build/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcworkspace/xcuserdata/
+.swiftpm/xcode/package.xcworkspace/xcuserdata/
+.swiftpm/configuration/registries.json
+
+# App / Model Artifacts
+*.gguf
+*.pt
+*.pt.enc
+*.bin
+Models/
+
+# OS Artifacts
+.DS_Store
+*.swp
+*~
+

@@ -393,6 +393,8 @@ DYLD_LIBRARY_PATH=.build .build/openring-mock
 
 ## Documentation Index
 
+* [**`TESTING_WITH_RING.md`**](TESTING_WITH_RING.md): Comprehensive step-by-step physical ring testing protocol on iPhone (pairing, sync, tab verification, troubleshooting).
+* [**`RELEASE_v0.1.md`**](RELEASE_v0.1.md): Formal v0.1 release notes, architecture summary, and test suite results.
 * [**`OpenRing App Engineering Docs.md`**](OpenRing%20App%20Engineering%20Docs.md): Full Product Requirements Document (PRD) and Technical Design Document (TDD).
 * [**`Implementation Plan.md`**](Implementation%20Plan.md): Detailed 8-phase technical execution plan, protocol specifications, and verification strategy.
 * [**`Decisions Log.md`**](Decisions%20Log.md): Architecture Decision Records (ADRs) tracking all 15 accepted decisions.
