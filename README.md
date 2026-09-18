@@ -98,6 +98,23 @@ We are executing development in structured, test-verified phases:
 * **Model Download Automation:** Provided [`scripts/download_model.sh`](scripts/download_model.sh) for resumable acquisition of the 4-bit quantized GGUF model weights (~1.45 GB).
 * **Verified with automated test suite:** **51 tests passed, 0 failures (7 Phase 6 tests)**.
 
+### ✅ Phase 7: Native SwiftUI Views & Interactive 60 FPS Charts (COMPLETED)
+* **Modular Packaging Architecture (DEC-018):** Separated presentation into dedicated `OpenRingUI` library target in `Package.swift` and thin `OpenRingApp` executable wrapper launching `@main struct OpenRingApp: App`.
+* **4-Tab Navigation Shell (`MainTabView`):**
+  * **Tab 1: Readiness Dashboard (`ReadinessDashboardView`):** Circular score gauge ($0–100$), biometric delta cards comparing against 14-day rolling baselines (RHR, HRV rMSSD, sleep efficiency, thermal deviation), and live BLE status/battery header.
+  * **Tab 2: Sleep Architecture (`SleepArchitectureView`):** 60 FPS interactive hypnogram chart (SwiftUI `Charts`) with stage scrubbing across Awake, REM, Light, and Deep stages, stage percentage cards, and deterministic Sleep Score ($0–100$, DEC-016).
+  * **Tab 3: Edge AI Recovery Coach (`RecoveryCoachView`):** Live streaming typewriter card rendering on-device Llama-3.2-3B recovery syntheses, formatted across 3 structured paragraphs (*Autonomic Load*, *Sleep Architecture*, *Actionable Protocol*) under 140 words, with an FDA SaMD non-diagnostic disclaimer.
+  * **Tab 4: Settings & Data Sovereignty (`SettingsView` - Combined Hub):**
+    * Ring hardware pairing & BLE connection status.
+    * Active AES-128 secret key hex viewer, 16-byte random key generator, and manual hex key import.
+    * Zero-telemetry audit confirmation (air-gapped sandbox verification with 0 network sockets).
+    * SQLite WAL database statistics (sample counts, episode counts, file size in KB).
+    * Full data portability with 1-tap raw export to CSV and JSON.
+    * Community credits, GPLv3 terms with App Store exception, and v2 AI model swapping hook.
+* **Adaptive Dynamic Theming (DEC-018):** Automatically adapts between Apple Light Mode and Dark Mode using semantic system colors, with standardized physiological recovery palette (Emerald, Sky Blue, Amber, Coral).
+* **Direct Hardware Data Binding:** Clean empty states prompting pairing when uninitialized without synthetic demo toggles.
+* **Verified with automated test suite:** **56 tests passed, 0 failures (5 Phase 7 tests)**.
+
 ---
 
 ## Deterministic Physiological Formulations
@@ -137,7 +154,7 @@ Sleep episodes concluding in the morning (between 04:00 and 14:00) are assigned 
 ```
 openring/
 ├── README.md                             # Project overview & status
-├── Decisions Log.md                      # Architecture Decision Records (DEC-001 - DEC-017)
+├── Decisions Log.md                      # Architecture Decision Records (DEC-001 - DEC-018)
 ├── Implementation Plan.md                # 8-Phase implementation roadmap & specs
 ├── OpenRing App Engineering Docs.md      # Unified PRD & Technical Design Document
 ├── Package.swift                         # Swift 6 package manifest
@@ -171,6 +188,27 @@ openring/
 │   │   │   └── PromptBuilder.swift       # Llama-3.2 instruct template & biometric table formatter
 │   │   └── Service/
 │   │       └── LLMInferenceService.swift # Foreground Jetsam defense gate & SQLite auto-persistence
+│   ├── OpenRingUI/                       # Native SwiftUI Views, ViewModels, Theme & 60 FPS Charts
+│   │   ├── Theme/
+│   │   │   └── Theme.swift               # Semantic light/dark surfaces & physiological recovery palette
+│   │   ├── Components/
+│   │   │   ├── ScoreGaugeView.swift      # Animated circular score gauge (0-100)
+│   │   │   ├── MetricDeltaCard.swift     # 14-day baseline biometric comparison cards
+│   │   │   ├── HypnogramChartView.swift  # Interactive 60 FPS hypnogram chart (SwiftUI Charts)
+│   │   │   └── TypewriterTextCard.swift  # Streaming token card with non-diagnostic footer
+│   │   ├── ViewModels/
+│   │   │   ├── DashboardViewModel.swift  # Tab 1 MainActor ViewModel
+│   │   │   ├── SleepViewModel.swift      # Tab 2 MainActor ViewModel
+│   │   │   ├── CoachViewModel.swift      # Tab 3 MainActor ViewModel
+│   │   │   └── SettingsViewModel.swift   # Tab 4 MainActor ViewModel (Settings + Sovereignty)
+│   │   └── Views/
+│   │       ├── ReadinessDashboardView.swift # Tab 1 View
+│   │       ├── SleepArchitectureView.swift  # Tab 2 View
+│   │       ├── RecoveryCoachView.swift      # Tab 3 View
+│   │       ├── SettingsView.swift           # Tab 4 View (Settings, Sovereignty & Portability)
+│   │       └── MainTabView.swift            # Root 4-tab container
+│   ├── OpenRingApp/                      # Application entry point
+│   │   └── OpenRingApp.swift             # @main struct OpenRingApp: App initializing actors
 │   ├── OpenRingMock/                     # Virtual peripheral & synthetic telemetry generator
 │   │   ├── MockDataGenerator.swift       # Full night session stream generator
 │   │   └── OuraRingMock.swift            # CBPeripheralManager GATT simulator
@@ -181,6 +219,7 @@ openring/
     ├── OpenRingMockTests/                # Tests for synthetic data & mock peripheral
     ├── OpenRingStorageTests/             # Tests for SQLite tables, range queries, ingestion
     ├── OpenRingAITests/                  # Tests for edge AI engine, Jetsam gates, prompt tables
+    ├── OpenRingUITests/                  # Tests for UI ViewModels, stage heuristics & data portability
     └── TestRunner/
         └── main.swift                    # Consolidated test executor
 ```
@@ -221,9 +260,19 @@ swiftc -module-cache-path .build/cache -I .build -L .build -lOpenRingCore -lOpen
   -parse-as-library Sources/OpenRingAI/Backend/*.swift Sources/OpenRingAI/Prompt/*.swift Sources/OpenRingAI/Service/*.swift \
   -emit-library -module-name OpenRingAI -o .build/libOpenRingAI.dylib
 
-# 5. Execute consolidated test suite
+# 5. Compile OpenRingUI library
+swiftc -module-cache-path .build/cache -I .build -L .build -lOpenRingCore -lOpenRingStorage -lOpenRingAI -lsqlite3 \
+  -parse-as-library Sources/OpenRingUI/Theme/*.swift Sources/OpenRingUI/Components/*.swift Sources/OpenRingUI/ViewModels/*.swift Sources/OpenRingUI/Views/*.swift \
+  -emit-library -module-name OpenRingUI -o .build/libOpenRingUI.dylib
+
+# 6. (Optional) Compile OpenRingApp standalone binary
+swiftc -module-cache-path .build/cache -parse-as-library \
+  -I .build -L .build -lOpenRingCore -lOpenRingStorage -lOpenRingAI -lOpenRingUI -lsqlite3 \
+  Sources/OpenRingApp/OpenRingApp.swift -o .build/OpenRingApp
+
+# 7. Execute consolidated test suite
 DYLD_LIBRARY_PATH=.build swift -module-cache-path .build/cache \
-  -I .build -L .build -lOpenRingCore -lOpenRingMock -lOpenRingStorage -lOpenRingAI -lsqlite3 \
+  -I .build -L .build -lOpenRingCore -lOpenRingMock -lOpenRingStorage -lOpenRingAI -lOpenRingUI -lsqlite3 \
   Tests/TestRunner/main.swift
 ```
 
@@ -282,7 +331,7 @@ Expected output:
   ✅ [PASS] Save and query sleep episodes
   ✅ [PASS] Save and query daily evaluations
   ✅ [PASS] Idempotency and update verification (INSERT OR REPLACE)
-     ⚡ 30-day range query (8,640 samples) completed in 0.71 ms (Target: < 10.0 ms)
+     ⚡ 30-day range query (8,640 samples) completed in 0.76 ms (Target: < 10.0 ms)
   ✅ [PASS] Performance Benchmark: 30-day range query latency (<10ms target)
 
 --- [8] SyncCoordinator Event Ingestion Pipeline ---
@@ -305,8 +354,15 @@ Expected output:
   ✅ [PASS] End-to-End Edge AI Synthesis Pipeline with SQLite WAL
   ✅ [PASS] LlamaCppBackend weight file validation
 
+--- [11] Native SwiftUI ViewModels & Presentation Logic ---
+  ✅ [PASS] Theme physiological recovery palette and tier title mapping
+  ✅ [PASS] DashboardViewModel empty state and live evaluation binding
+  ✅ [PASS] SleepViewModel episode parsing, hypnogram generation, and heuristic staging
+  ✅ [PASS] CoachViewModel synthesis state transitions and streaming consumption
+  ✅ [PASS] SettingsViewModel key management, validation, and zero-telemetry export
+
 ==================================================
- Test Results: 51 Passed, 0 Failed
+ Test Results: 56 Passed, 0 Failed
 ==================================================
 ```
 

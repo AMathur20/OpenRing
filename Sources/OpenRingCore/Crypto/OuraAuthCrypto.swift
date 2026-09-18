@@ -145,5 +145,20 @@ public enum OuraAuthCrypto {
         
         return outBuffer.prefix(numBytesDecrypted)
     }
+    
+    /// Parses a hexadecimal string into Data bytes (returns nil if length is odd or contains invalid characters).
+    public static func hexStringToData(_ hex: String) -> Data? {
+        let cleanHex = hex.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: " ", with: "")
+        guard cleanHex.count % 2 == 0 else { return nil }
+        var data = Data()
+        var index = cleanHex.startIndex
+        while index < cleanHex.endIndex {
+            let nextIndex = cleanHex.index(index, offsetBy: 2)
+            guard let byte = UInt8(cleanHex[index..<nextIndex], radix: 16) else { return nil }
+            data.append(byte)
+            index = nextIndex
+        }
+        return data
+    }
 }
 

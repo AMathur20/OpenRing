@@ -24,6 +24,14 @@ let package = Package(
             name: "OpenRingAI",
             targets: ["OpenRingAI"]
         ),
+        .library(
+            name: "OpenRingUI",
+            targets: ["OpenRingUI"]
+        ),
+        .executable(
+            name: "OpenRingApp",
+            targets: ["OpenRingApp"]
+        ),
         .executable(
             name: "openring-mock",
             targets: ["MockRunner"]
@@ -71,6 +79,35 @@ let package = Package(
                 "OpenRingStorage"
             ],
             path: "Sources/OpenRingAI",
+            swiftSettings: [
+                .swiftLanguageMode(.v6)
+            ]
+        ),
+
+        // Native SwiftUI presentation layer & interactive 60 FPS charts (DEC-018)
+        .target(
+            name: "OpenRingUI",
+            dependencies: [
+                "OpenRingCore",
+                "OpenRingStorage",
+                "OpenRingAI"
+            ],
+            path: "Sources/OpenRingUI",
+            swiftSettings: [
+                .swiftLanguageMode(.v6)
+            ]
+        ),
+
+        // Application entry point wrapper
+        .executableTarget(
+            name: "OpenRingApp",
+            dependencies: [
+                "OpenRingUI",
+                "OpenRingCore",
+                "OpenRingStorage",
+                "OpenRingAI"
+            ],
+            path: "Sources/OpenRingApp",
             swiftSettings: [
                 .swiftLanguageMode(.v6)
             ]
@@ -125,6 +162,21 @@ let package = Package(
                 "OpenRingStorage"
             ],
             path: "Tests/OpenRingAITests",
+            swiftSettings: [
+                .swiftLanguageMode(.v6)
+            ]
+        ),
+
+        // Unit tests for UI ViewModels, formatting & presentation
+        .testTarget(
+            name: "OpenRingUITests",
+            dependencies: [
+                "OpenRingUI",
+                "OpenRingCore",
+                "OpenRingStorage",
+                "OpenRingAI"
+            ],
+            path: "Tests/OpenRingUITests",
             swiftSettings: [
                 .swiftLanguageMode(.v6)
             ]

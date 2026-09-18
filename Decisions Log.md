@@ -25,6 +25,7 @@ This document records all key architectural, technical, product, and regulatory 
 | **DEC-015** | Native SQLite3 WAL Engine Layer (Zero External Dependencies) | **Accepted** | 2026-09-17 | Storage & Concurrency |
 | **DEC-016** | Deterministic Sleep Score Math & Morning Wake-Up Attribution | **Accepted** | 2026-09-17 | Biometric DSP & Scoring |
 | **DEC-017** | Dual-Backend Edge AI Engine & Foreground Jetsam Defense | **Accepted** | 2026-09-18 | Edge AI & Testing |
+| **DEC-018** | Native SwiftUI Modular Architecture, 4-Tab Navigation & Semantic Theming | **Accepted** | 2026-09-18 | UI & App Architecture |
 
 ---
 
@@ -259,3 +260,30 @@ This document records all key architectural, technical, product, and regulatory 
   5. **Automated SQLite WAL Persistence:** Generated recovery syntheses are streamed live via `AsyncStream<String>` and automatically committed to `DailyEvaluationRecord.aiSynthesisMarkdown` in `DatabaseService` upon completion.
 * **Rationale:** Completely eliminates background Jetsam termination risks, guarantees fast offline CI test execution, and maintains strict separation between runtime inference and local data persistence.
 * **Consequences:** Tests execute in <1s without network or large binaries. Physical deployment uses `scripts/download_model.sh` to acquire weights for on-device Metal acceleration.
+
+---
+
+### DEC-018: Native SwiftUI Modular Architecture, 4-Tab Navigation & Semantic Theming
+* **Status:** Accepted
+* **Date:** 2026-09-18
+* **Context:** In Phase 7, OpenRing's user interface is constructed. We must specify the packaging architecture (modular vs. unified app), navigation schema, visual theming, and hardware data binding behavior.
+* **Decision:**
+  1. **Modular Architecture:** Build the UI layer as an isolated Swift Package target **`OpenRingUI`** (views, ViewModels, charting components) dependent on `OpenRingCore`, `OpenRingStorage`, and `OpenRingAI`, wrapped by an executable entry-point **`OpenRingApp`**.
+  2. **4-Tab Navigation Schema:**
+     * **Tab 1: Readiness (`ReadinessDashboardView`):** Radial Readiness Score gauge ($0–100$), sub-score metrics (RHR delta, HRV rMSSD % delta, sleep efficiency, temperature deviation), 14-day rolling baseline comparisons, and live BLE status/battery header.
+     * **Tab 2: Sleep (`SleepArchitectureView`):** 60 FPS interactive hypnogram chart (SwiftUI `Charts`) with stage scrubbing across Awake, REM, Light, and Deep stages, stage duration metrics, and Sleep Score ($0–100$).
+     * **Tab 3: Recovery (`RecoveryCoachView`):** Typewriter token streaming card for on-device Llama-3.2-3B recovery synthesis, structured 3-paragraph display (*Autonomic Load*, *Sleep Architecture*, *Actionable Recovery Protocol*), and FDA SaMD non-diagnostic disclaimer.
+     * **Tab 4: Settings (`SettingsView`):** Unified hub combining:
+       * **Ring Hardware & Pairing:** BLE state, discovery/connection, RSSI, and battery telemetry.
+       * **Security & Keys:** Active AES-128 key hex, 16-byte key import, and factory pairing reset.
+       * **Data Sovereignty Audit:** Zero-telemetry validation badge, air-gapped sandbox verification (0 network sockets), and SQLite WAL database stats.
+       * **Data Portability:** Raw SQL export of biometric samples, temperature series, and sleep sessions to CSV/JSON format.
+       * **Community & Credits:** `open_oura` and `llama.cpp` acknowledgments, GNU GPLv3 terms, and Apple App Store / Google Play exception details.
+       * **Feedback & Diagnostics:** Local offline log browser.
+       * **v2 Extension Hook:** AI model selection placeholder for future GGUF swapping.
+     * **v2 Tab Roadmap:** A 5th tab dedicated to **Workout Tracking** is planned for v2.0.
+  3. **System-Adaptive Semantic Theming:** Automatically adapt between Apple Light Mode and Dark Mode using system semantic colors (`Color(uiColor: .systemBackground)`, `Color(uiColor: .secondarySystemGroupedBackground)`, etc.), accented by physiological recovery color coding (Emerald for optimal recovery, Sky Blue for nominal, Amber for strain, Coral for critical recovery).
+  4. **Direct Hardware Data Binding:** No synthetic demo toggle in the production UI; views bind directly to live `BLEEngine` streams and `DatabaseService` records with clean empty states when no ring has been paired yet.
+* **Rationale:** Modular separation ensures `@MainActor` UI components remain decoupled from low-level C libraries and actors, while enabling code reuse for future iOS Widgets or watchOS companions. Combining Sovereignty with Settings maintains a focused 4-tab user experience for v1.0.
+* **Consequences:** Clean architecture, rapid preview and test execution, zero external UI framework dependencies.
+

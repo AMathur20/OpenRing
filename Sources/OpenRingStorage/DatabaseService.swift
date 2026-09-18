@@ -741,5 +741,53 @@ public actor DatabaseService {
         }
         return results
     }
+    
+    // MARK: - Database Diagnostics & Sovereignty Statistics
+    
+    public struct DatabaseStats: Sendable {
+        public let biometricCount: Int
+        public let sleepCount: Int
+        public let evalCount: Int
+        public let sizeKB: Int
+        
+        public init(biometricCount: Int, sleepCount: Int, evalCount: Int, sizeKB: Int) {
+            self.biometricCount = biometricCount
+            self.sleepCount = sleepCount
+            self.evalCount = evalCount
+            self.sizeKB = sizeKB
+        }
+    }
+    
+    public func fetchDatabaseStats() throws -> DatabaseStats {
+        let biometrics = try countRows(table: "biometric_samples")
+        let sleeps = try countRows(table: "sleep_episodes")
+        let evals = try countRows(table: "daily_evaluations")
+        
+        var sizeKB = 0
+        if databasePath != ":memory:",
+           let attrs = try? FileManager.default.attributesOfItem(atPath: databasePath),
+           let size = attrs[.size] as? Int64 {
+            sizeKB = Int(size / 1024)
+        }
+        return DatabaseStats(biometricCount: biometrics, sleepCount: sleeps, evalCount: evals, sizeKB: sizeKB)
+    }
+    
+    public func fetchAllDailyEvaluations() throws -> [DailyEvaluationRecord] {
+        return try fetchLatestDailyEvaluations(limit: 1000)
+    }
+    
+    private func countRows(table: String) throws -> Int {
+        guard let db = db else { throw SQLiteStorageError.connectionFailed("Database closed") }
+        let sql = "SELECT COUNT(*) FROM \(table);"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            return 0
+        }
+        defer { sqlite3_finalize(stmt) }
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            return Int(sqlite3_column_int(stmt, 0))
+        }
+        return 0
+    }
 }
 

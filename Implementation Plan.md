@@ -94,12 +94,12 @@ Once the open questions in Phase 1 are clarified, the development of OpenRing wi
                                         │
                                         ▼
 +-------------------------------------------------------------------------------+
-| Phase 7: Native SwiftUI Views & Interactive 60 FPS Charts [NEXT UP]           |
+| Phase 7: Native SwiftUI Views & Interactive 60 FPS Charts (COMPLETED)         |
 +-------------------------------------------------------------------------------+
                                         │
                                         ▼
 +-------------------------------------------------------------------------------+
-| Phase 8: Background State Restoration, Jetsam Hardening & App Store Audit     |
+| Phase 8: Background State Restoration, Jetsam Hardening & Audit [NEXT UP]     |
 +-------------------------------------------------------------------------------+
 ```
 
@@ -178,14 +178,32 @@ Once the open questions in Phase 1 are clarified, the development of OpenRing wi
 - Created automated download helper script: [`scripts/download_model.sh`](file:///Users/ankurmathur/Documents/openring/scripts/download_model.sh) to fetch `Llama-3.2-3B-Instruct-Q4_K_M.gguf` via resumable `curl`.
 - Verified with automated test suite: **51/51 passing tests (7 Phase 6 tests)**.
 
-### Phase 7: Native SwiftUI Views & Interactive 60 FPS Charts [NEXT UP]
-- Build SwiftUI user interface matching the architectural blueprint:
-  - **Daily Readiness View:** Radial readiness score gauge, baseline delta badges, autonomic strain indicators.
-  - **Sleep Architecture View:** Interactive SwiftUI Charts rendering Awake, REM, Light, and Deep stages with pinch/pan navigation at 60 FPS.
-  - **AI Recovery Coach View:** Live token streaming card, historical advice browser, non-clinical wellness insights.
-  - **Settings & Data Sovereignty View:** Zero-telemetry audit, BLE connection status, raw SQL export (CSV/Parquet).
+### Phase 7: Native SwiftUI Views & Interactive 60 FPS Charts (COMPLETED)
+- **Modular Packaging Architecture (DEC-018):**
+  - Implement `OpenRingUI` library target in `Package.swift` (dependent on `OpenRingCore`, `OpenRingStorage`, `OpenRingAI`).
+  - Implement `OpenRingApp` executable wrapper launching `@main struct OpenRingApp: App`.
+- **4-Tab Navigation Shell (`MainTabView`):**
+  - **Tab 1: Readiness (`ReadinessDashboardView`):** Radial readiness score gauge ($0–100$), sub-score metrics (RHR delta, HRV rMSSD % delta, sleep efficiency, temperature deviation), 14-day rolling baseline comparisons, and live BLE status/battery header.
+  - **Tab 2: Sleep (`SleepArchitectureView`):** 60 FPS interactive hypnogram chart (SwiftUI `Charts`) with stage scrubbing across Awake, REM, Light, and Deep stages, stage duration metrics, and Sleep Score ($0–100$).
+  - **Tab 3: Recovery (`RecoveryCoachView`):** Typewriter token streaming card for on-device Llama-3.2-3B recovery synthesis, structured 3-paragraph display (*Autonomic Load*, *Sleep Architecture*, *Actionable Recovery Protocol*), and FDA SaMD non-diagnostic disclaimer.
+  - **Tab 4: Settings (`SettingsView` - Combined Hub):**
+    - Ring hardware & pairing: BLE state, discovery/connection, RSSI, and battery telemetry.
+    - Security & Keys: Active AES-128 key hex, 16-byte key import, and factory pairing reset.
+    - Data Sovereignty Audit: Zero-telemetry validation badge, air-gapped sandbox verification (0 network sockets), and SQLite WAL database stats.
+    - Data Portability: Raw SQL export of biometric samples, temperature series, and sleep sessions to CSV/JSON format.
+    - Community & Credits: `open_oura` and `llama.cpp` acknowledgments, GNU GPLv3 terms, and Apple App Store / Google Play exception details.
+    - Feedback & Diagnostics: Local offline log browser.
+    - v2 Extension Hook: AI model selection placeholder for future GGUF swapping.
+  - *(Roadmap: A 5th tab dedicated to **Workout Tracking** is planned for v2.0).*
+- **Adaptive Semantic Theming (DEC-018):**
+  - Automatically adapt between Apple Light Mode and Dark Mode using system semantic colors (`systemBackground`, `secondarySystemGroupedBackground`, etc.).
+  - Color-code recovery states: Emerald (optimal), Sky Blue (nominal), Amber (strain), Coral (recovery needed).
+- **Direct Hardware Data Binding:**
+  - Binds directly to `DatabaseService` and `BLEEngine` without synthetic demo toggles.
+  - Graceful empty states prompting pairing when uninitialized.
+- **Verified with automated test suite:** **56 tests passed, 0 failures (5 Phase 7 tests)**.
 
-### Phase 8: Background Ingestion, Reliability & App Store Hardening
+### Phase 8: Background Ingestion, Reliability & App Store Hardening [NEXT UP]
 - Implement iOS background execution handler:
   - Background fetch / BLE background state restoration within 30-second window.
   - Pointer-safe ACK protocol (advancing flash pointer only after verified DB commit).

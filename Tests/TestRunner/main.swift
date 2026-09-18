@@ -3,6 +3,7 @@ import OpenRingCore
 import OpenRingMock
 import OpenRingStorage
 import OpenRingAI
+import OpenRingUI
 
 @MainActor
 func runAllTests() async {
@@ -1192,6 +1193,252 @@ func runAllTests() async {
                 fatalError("Unexpected error type: \(err)")
             }
         }
+    }
+    
+    // MARK: - [11] Native SwiftUI ViewModels & Presentation Logic
+    print("\n--- [11] Native SwiftUI ViewModels & Presentation Logic ---")
+    
+    await runTest("Theme physiological recovery palette and tier title mapping") {
+        // Test score tier titles
+        assert(Theme.scoreTierTitle(for: 95) == "Optimal Recovery")
+        assert(Theme.scoreTierTitle(for: 85) == "Optimal Recovery")
+        assert(Theme.scoreTierTitle(for: 80) == "Good Recovery")
+        assert(Theme.scoreTierTitle(for: 70) == "Good Recovery")
+        assert(Theme.scoreTierTitle(for: 65) == "Moderate Strain")
+        assert(Theme.scoreTierTitle(for: 55) == "Moderate Strain")
+        assert(Theme.scoreTierTitle(for: 50) == "Critical Recovery")
+        assert(Theme.scoreTierTitle(for: 20) == "Critical Recovery")
+        
+        // Test sleep tier titles
+        assert(Theme.sleepTierTitle(for: 90) == "Optimal Sleep")
+        assert(Theme.sleepTierTitle(for: 75) == "Good Rest")
+        assert(Theme.sleepTierTitle(for: 60) == "Fair Rest")
+        assert(Theme.sleepTierTitle(for: 40) == "Fragmented Sleep")
+        
+        // Test HypnogramEpoch stage mapping
+        let now = Date()
+        let deepEpoch = HypnogramEpoch(timestamp: now, stage: .deep)
+        let lightEpoch = HypnogramEpoch(timestamp: now, stage: .light)
+        let remEpoch = HypnogramEpoch(timestamp: now, stage: .rem)
+        let awakeEpoch = HypnogramEpoch(timestamp: now, stage: .awake)
+        
+        assert(deepEpoch.stageIndex == 0)
+        assert(lightEpoch.stageIndex == 1)
+        assert(remEpoch.stageIndex == 2)
+        assert(awakeEpoch.stageIndex == 3)
+        assert(deepEpoch.stageTitle == "Deep Sleep")
+        assert(remEpoch.stageTitle == "REM Sleep")
+    }
+    
+    await runTest("DashboardViewModel empty state and live evaluation binding") {
+        let db = try DatabaseService(inMemory: true)
+        let vm = DashboardViewModel(database: db)
+        
+        // Verify initial empty state
+        assert(vm.readinessScore == 0)
+        assert(!vm.hasEvaluation)
+        
+        await vm.refresh(for: "2026-05-15")
+        assert(!vm.hasEvaluation)
+        assert(vm.readinessTitle == "Pair Ring to Begin")
+        
+        // Seed evaluation record into SQLite
+        let eval = DailyEvaluationRecord(
+            evaluationDate: "2026-05-15",
+            readinessScore: 88,
+            sleepScore: 85,
+            rhrBaseline: 52.0,
+            hrvBaseline: 65.0,
+            aiSynthesisMarkdown: nil,
+            aiModelTag: nil,
+            generatedAt: 1000
+        )
+        try await db.saveDailyEvaluation(eval)
+        
+        // Update vitals on ViewModel
+        vm.updateVitals(rhr: 50, hrv: 70, efficiency: 90, temp: -0.1)
+        
+        // Refresh with target date
+        await vm.refresh(for: "2026-05-15")
+        
+        assert(vm.hasEvaluation)
+        assert(vm.readinessScore == 88)
+        assert(vm.readinessTitle == "Optimal Recovery")
+        assert(vm.rhrBaseline == 52)
+        assert(vm.hrvBaseline == 65)
+        assert(vm.rhrDeltaString == "-2 bpm")
+        assert(vm.rhrStatus == .optimal)
+        assert(vm.sleepEfficiencyStatus == .optimal)
+        
+        // Test BLE state update
+        vm.updateBLEState(.connected(authenticated: true), battery: 94)
+        assert(vm.bleState == .connected(authenticated: true))
+        assert(vm.ringBattery == 94)
+    }
+    
+    await runTest("SleepViewModel episode parsing, hypnogram generation, and heuristic staging") {
+        let db = try DatabaseService(inMemory: true)
+        let vm = SleepViewModel(database: db)
+        
+        // Initial empty state
+        assert(!vm.hasSleepSession)
+        assert(vm.sleepScore == 0)
+        assert(vm.hypnogramEpochs.isEmpty)
+        
+        // Seed a realistic sleep episode
+        let episode = SleepEpisodeRecord(
+            sessionId: "sleep_test_1",
+            startTime: 100_000,
+            endTime: 128_800,
+            durationSeconds: 28800, // 8 hours
+            efficiencyRatio: 0.90,
+            deepSleepSeconds: 7200, // 2 hours (25%)
+            remSleepSeconds: 5760,  // 1.6 hours (20%)
+            lightSleepSeconds: 12960,
+            awakeSeconds: 2880,
+            lowestHeartRate: 46,
+            averageHeartRate: 50.0,
+            averageRmssd: 72.0,
+            temperatureDeviation: -0.08
+        )
+        try await db.saveSleepEpisode(episode)
+        
+        // Seed biometric samples with varying HR and motion to test heuristic stage classification:
+        // Baseline RHR = 50.0
+        // Sample 1: motion 0.40 (> 0.30) -> .awake
+        // Sample 2: HR 45 (<= 50 * 0.95), motion 0.02 (< 0.05) -> .deep
+        // Sample 3: HR 55 (> 50 * 1.05), motion 0.10 (< 0.15) -> .rem
+        // Sample 4: HR 50, motion 0.10 -> .light
+        let samples = [
+            BiometricSampleRecord(timestamp: 105_000, heartRateBpm: 60.0, rmssdMs: 40.0, motionIntensity: 0.40, ppgSignalQuality: 0.95),
+            BiometricSampleRecord(timestamp: 110_000, heartRateBpm: 45.0, rmssdMs: 80.0, motionIntensity: 0.02, ppgSignalQuality: 0.98),
+            BiometricSampleRecord(timestamp: 115_000, heartRateBpm: 55.0, rmssdMs: 65.0, motionIntensity: 0.10, ppgSignalQuality: 0.96),
+            BiometricSampleRecord(timestamp: 120_000, heartRateBpm: 50.0, rmssdMs: 70.0, motionIntensity: 0.10, ppgSignalQuality: 0.97)
+        ]
+        try await db.saveBiometricSamples(samples)
+        
+        await vm.loadLatestSleep()
+        
+        assert(vm.hasSleepSession)
+        assert(vm.durationString == "8h 0m")
+        assert(vm.efficiencyPercentage == 90)
+        assert(vm.sleepScore >= 80, "Expected high sleep score for 8h sleep and 90% efficiency, got \(vm.sleepScore)")
+        assert(vm.hypnogramEpochs.count == 4, "Expected 4 epochs, got \(vm.hypnogramEpochs.count)")
+        assert(vm.hypnogramEpochs[0].stage == .awake, "Epoch 0 should be awake")
+        assert(vm.hypnogramEpochs[1].stage == .deep, "Epoch 1 should be deep")
+        assert(vm.hypnogramEpochs[2].stage == .rem, "Epoch 2 should be rem")
+        assert(vm.hypnogramEpochs[3].stage == .light, "Epoch 3 should be light")
+    }
+    
+    await runTest("CoachViewModel synthesis state transitions and streaming consumption") {
+        let db = try DatabaseService(inMemory: true)
+        let backend = MockInferenceBackend(isLoadedInitially: true)
+        let inferenceService = LLMInferenceService(backend: backend, database: db, isForeground: true)
+        let vm = CoachViewModel(database: db, inferenceService: inferenceService)
+        
+        let eval = DailyEvaluationRecord(
+            evaluationDate: "2026-05-15",
+            readinessScore: 82,
+            sleepScore: 90,
+            rhrBaseline: 51.0,
+            hrvBaseline: 64.0,
+            aiSynthesisMarkdown: nil,
+            aiModelTag: nil,
+            generatedAt: 1000
+        )
+        try await db.saveDailyEvaluation(eval)
+        
+        await vm.loadTodaySynthesis(date: "2026-05-15")
+        assert(vm.hasEvaluation)
+        assert(vm.synthesisText.isEmpty)
+        assert(!vm.isGenerating)
+        assert(vm.errorMessage == nil)
+        
+        // Trigger live generation
+        await vm.generateSynthesis()
+        assert(!vm.isGenerating)
+        assert(!vm.synthesisText.isEmpty)
+        assert(vm.errorMessage == nil)
+        
+        let paragraphs = vm.synthesisText.components(separatedBy: "\n\n").filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        assert(paragraphs.count == 3, "Output should contain 3 paragraphs")
+        
+        // Test direct synthesis override
+        vm.setDirectSynthesis(text: "Direct synthesis test", modelTag: "TestModel")
+        assert(vm.synthesisText == "Direct synthesis test")
+        assert(vm.modelTag == "TestModel")
+    }
+    
+    await runTest("SettingsViewModel key management, validation, and zero-telemetry export") {
+        let db = try DatabaseService(inMemory: true)
+        let vm = SettingsViewModel(database: db)
+        
+        // Key generation
+        vm.generateRandomKey()
+        assert(vm.currentKeyHex.count == 32)
+        assert(vm.keyStatusMessage?.contains("pairing key") == true)
+        assert(vm.showAlert)
+        
+        // Key import validation: invalid hex length
+        vm.importKeyInput = "deadbeef"
+        vm.importSecretKey()
+        assert(vm.keyStatusMessage?.contains("Invalid key") == true)
+        assert(vm.currentKeyHex != "deadbeef")
+        
+        // Key import validation: valid 32-character hex
+        let validKey = "0123456789abcdef0123456789abcdef"
+        vm.importKeyInput = validKey
+        vm.importSecretKey()
+        assert(vm.currentKeyHex == validKey)
+        assert(vm.keyStatusMessage?.contains("successfully") == true)
+        
+        // BLE state update
+        vm.updateBLEState(.connected(authenticated: true), name: "Oura Ring Gen3 1234", battery: 85)
+        assert(vm.bleState == .connected(authenticated: true))
+        assert(vm.connectedRingName == "Oura Ring Gen3 1234")
+        assert(vm.ringBatteryLevel == 85)
+        
+        // Zero-telemetry audit confirmation
+        assert(vm.zeroNetworkVerified)
+        
+        // Seed samples and evaluations for export testing
+        let sample = BiometricSampleRecord(
+            timestamp: 1715000000000,
+            heartRateBpm: 58.0,
+            rmssdMs: 62.0,
+            motionIntensity: 0.05,
+            ppgSignalQuality: 0.99
+        )
+        try await db.saveBiometricSamples([sample])
+        
+        let eval = DailyEvaluationRecord(
+            evaluationDate: "2026-05-15",
+            readinessScore: 84,
+            sleepScore: 88,
+            rhrBaseline: 52.0,
+            hrvBaseline: 60.0,
+            aiSynthesisMarkdown: "Great recovery status.",
+            aiModelTag: "Llama-3.2-3B",
+            generatedAt: 1715000000000
+        )
+        try await db.saveDailyEvaluation(eval)
+        
+        await vm.loadSettingsAndStats()
+        assert(vm.totalBiometricSamples == 1)
+        assert(vm.totalDailyEvaluations == 1)
+        
+        // Test CSV export
+        let csv = await vm.exportBiometricsToCSV()
+        assert(csv.contains("timestamp_ms,heart_rate_bpm,rmssd_ms,motion_intensity,signal_quality"))
+        assert(csv.contains("1715000000000,58.0,62.0,0.05,0.99"))
+        assert(vm.exportFormat == "CSV")
+        
+        // Test JSON export
+        let json = await vm.exportEvaluationsToJSON()
+        assert(json.contains("\"evaluationDate\" : \"2026-05-15\""))
+        assert(json.contains("\"readinessScore\" : 84"))
+        assert(json.contains("\"aiModelTag\" : \"Llama-3.2-3B\""))
+        assert(vm.exportFormat == "JSON")
     }
     
     print("\n==================================================")
